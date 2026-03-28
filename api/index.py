@@ -1,10 +1,8 @@
-from flask import Flask
 import requests
 import re
 import os
+import time
 from datetime import datetime
-
-app = Flask(__name__)
 
 # === ENVIRONMENT VARIABLES ===
 TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN") 
@@ -15,7 +13,6 @@ IVA_COOKIES = {
 }
 OWNER_NAME = "Zain Malik"
 
-# Duplicate SMS rokne ke liye memory
 seen_messages = set()
 
 COUNTRY_FLAGS = {
@@ -107,12 +104,9 @@ def fetch_sms():
                     data = response.json()
                     messages = data.get("messages", []) or data.get("sms", []) or data.get("data", []) or []
                     
-                    new_messages_count = 0
                     for msg in messages:
                         text = msg.get("text", "")
                         time_str = msg.get("time", datetime.now().strftime("%H:%M:%S"))
-                        
-                        # Har message ki pehchaan banane ke liye
                         msg_id = text + time_str
                         
                         if msg_id not in seen_messages:
@@ -120,30 +114,19 @@ def fetch_sms():
                             sender = msg.get("sender", "Unknown")
                             send_to_channel(phone, sender, text, time_str)
                             seen_messages.add(msg_id)
-                            new_messages_count += 1
                     
-                    # Memory clear taake server par bojh na pade
                     if len(seen_messages) > 200:
                         seen_messages.clear()
-                        
-                    if new_messages_count > 0:
-                        return new_messages_count
+                    return
             except:
                 continue
     except:
         pass
-    return 0
-
-@app.route('/')
-def home():
-    # Watchman jab aayega, yeh line lazmi chalegi
-    messages_found = fetch_sms()
-    return {
-        "status": "running", 
-        "owner": OWNER_NAME, 
-        "channel": TELEGRAM_CHANNEL_ID, 
-        "new_sms_sent": messages_found
-    }
 
 if __name__ == "__main__":
-    app.run()
+    print("🚀 Bot is LIVE on AWS Server!")
+    print("✅ Checking for new OTPs every 2 seconds...")
+    while True:
+        fetch_sms()
+        time.sleep(2) # 2 Second ki superfast speed!
+                                                  
