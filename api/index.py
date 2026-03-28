@@ -1,15 +1,12 @@
 from flask import Flask
 import requests
-import time
 import re
-import threading
 import os
 from datetime import datetime
 
 app = Flask(__name__)
 
 # === ENVIRONMENT VARIABLES ===
-# Yahan se hardcoded tokens hata diye gaye hain security ke liye
 TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN") 
 TELEGRAM_CHANNEL_ID = os.environ.get("CHANNEL_ID")
 IVA_COOKIES = {
@@ -17,6 +14,9 @@ IVA_COOKIES = {
     "csrftoken": os.environ.get("IVA_CSRF", "")
 }
 OWNER_NAME = "Zain Malik"
+
+# Duplicate SMS rokne ke liye memory
+seen_messages = set()
 
 COUNTRY_FLAGS = {
     "pakistan": "🇵🇰", "india": "🇮🇳", "usa": "🇺🇸", "uk": "🇬🇧",
@@ -68,7 +68,7 @@ def send_to_channel(phone, sender, message, timestamp):
 {country_flag} <b>Country:</b> {country_name}
 {service_icon} <b>Service:</b> {service_name}
 📞 <b>Number:</b> <code>{mask_number(phone)}</code>
-🔑 <b>OTP:</b> `{otp}`
+🔑 <b>OTP:</b> <code>{otp}</code>
 ✉️ <b>Full Message:</b>
 <code>{message}</code>
 👤 <b>Owner:</b> {OWNER_NAME}"""
@@ -82,14 +82,14 @@ def send_to_channel(phone, sender, message, timestamp):
     
     try:
         requests.post(url, json=payload, timeout=10)
-        time.sleep(1)
     except:
         pass
 
 def fetch_sms():
+    global seen_messages
     try:
         today = datetime.now().strftime("%d/%m/%Y")
-        endpoints = ["/api/sms", "/portal/api/sms", "/api/messages"]
+        endpoints = ["/api/sms", "/portal/api/sms", "/api/messages", "/portal/live/api/sms"]
         
         headers = {
             "User-Agent": "Mozilla/5.0",
@@ -101,41 +101,49 @@ def fetch_sms():
             try:
                 url = f"https://www.ivasms.com{endpoint}"
                 response = requests.get(url, headers=headers, cookies=IVA_COOKIES, 
-                                      params={"date": today, "limit": 50}, timeout=15)
+                                      params={"date": today, "limit": 20}, timeout=10)
                 
                 if response.status_code == 200:
                     data = response.json()
-                    messages = data.get("messages", []) or data.get("sms", []) or []
+                    messages = data.get("messages", []) or data.get("sms", []) or data.get("data", []) or []
                     
+                    new_messages_count = 0
                     for msg in messages:
-                        phone = msg.get("phone", "Unknown")
-                        sender = msg.get("sender", "Unknown")
                         text = msg.get("text", "")
                         time_str = msg.get("time", datetime.now().strftime("%H:%M:%S"))
-                        send_to_channel(phone, sender, text, time_str)
+                        
+                        # Har message ki pehchaan banane ke liye
+                        msg_id = text + time_str
+                        
+                        if msg_id not in seen_messages:
+                            phone = msg.get("phone", "Unknown")
+                            sender = msg.get("sender", "Unknown")
+                            send_to_channel(phone, sender, text, time_str)
+                            seen_messages.add(msg_id)
+                            new_messages_count += 1
                     
-                    return len(messages)
+                    # Memory clear taake server par bojh na pade
+                    if len(seen_messages) > 200:
+                        seen_messages.clear()
+                        
+                    if new_messages_count > 0:
+                        return new_messages_count
             except:
                 continue
     except:
         pass
     return 0
 
-def bot_worker():
-    while True:
-        fetch_sms()
-        time.sleep(30)
-
-threading.Thread(target=bot_worker, daemon=True).start()
-
 @app.route('/')
 def home():
-    return {"status": "running", "owner": OWNER_NAME, "channel": TELEGRAM_CHANNEL_ID}
-
-@app.route('/ping')
-def ping():
-    return {"status": "alive"}
+    # Watchman jab aayega, yeh line lazmi chalegi
+    messages_found = fetch_sms()
+    return {
+        "status": "running", 
+        "owner": OWNER_NAME, 
+        "channel": TELEGRAM_CHANNEL_ID, 
+        "new_sms_sent": messages_found
+    }
 
 if __name__ == "__main__":
     app.run()
-    
