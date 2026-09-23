@@ -4,6 +4,7 @@ python run_mts_h1.py mde | register | evaluate
 import logging
 import sqlite3
 import sys
+import numpy as np
 import pandas as pd
 
 from econometric_audit import (
@@ -33,8 +34,8 @@ SPEC = {
     "test_number": 2,
     "alpha": 0.025,
     "freeze_date": "2026-10-01",            # first report_date counted (after pre-registration window)
-    "evaluation_sessions": 240,             # 240 sessions gives MDE ~1.23% per 10-day horizon (85% power)
-    "power_statement": "Under sector-matched placebo matching Q5's exact composition (5 Banks, 2 E&P, 2 Cement, 1 OMC, 1 Power, 1 Fertilizer; sigma ~0.626%), T=240 sessions yields 10-day Simulated MDE of 1.400% (20-draw median) at 85% power (Analytic MDE 1.226%). Power at 1.0% 10-day spread is ~52.4% under empirical fat tails. If null cannot be rejected, conclusion is: 'No crowding effect larger than 1.40% per 10 sessions detected'.",
+    "evaluation_sessions": 240,             # 240 sessions gives MDE ~1.23% per 10-day horizon (80% power)
+    "power_statement": "Under sector-matched placebo matching Q5's exact composition (5 Banks, 2 E&P, 2 Cement, 1 OMC, 1 Power, 1 Fertilizer; sigma ~0.626%), T=240 sessions yields 10-day Simulated MDE of 1.400% (20-draw median) at 80% power (Analytic MDE 1.226%). Power at 1.0% 10-day spread is ~52.4% under empirical fat tails. If null cannot be rejected, conclusion is: 'No crowding effect larger than 1.40% per 10 sessions detected'.",
     "signal": {
         "column": "open_pct",
         "rank": "cross-sectional over financed names (L>0), average ties",
@@ -99,7 +100,7 @@ SPEC = {
         "degradation_label": "DEGRADED if missing cohort sessions exceed 10%",
         "shadow_run_window": "2026-09-24 to 2026-09-30 (zero peeking at returns, feed health only)"
     },
-    "feed_frequency_decision_rule": "Strict Forward Freeze Gate: Between Sep 24 and Sep 30, all 5 consecutive sessions MUST receive a fresh NCCPL report before 09:15 PKT on T+2, with internal report_date advancing sequentially. If even 1 session is missed or report_date remains stagnant (e.g. at 2026-09-14), Oct 1 forward run SHALL BE AUTOMATICALLY POSTPONED. Zero peeking, zero cost for postponement.",
+    "feed_frequency_decision_rule": "Decision by user on 2026-09-30 based on shadow log: Between Sep 24 and Sep 30, all 5 consecutive sessions must receive fresh NCCPL reports with sequentially advancing internal report dates. If any session is missed or report date remains stagnant (e.g. at 2026-09-14), Oct 1 forward run SHALL BE POSTPONED via pre-data Amendment to adapt to weekly sleeves or delay freeze date. Zero peeking, zero cost for postponement.",
     "historical_total_return_status": "All 383 historical corporate actions backfilled via Exchange LDCP gap and ratio analysis. Full 238-day history is now pure Total Return.",
     "revision_policy": "Final pre-data revision V3. Post-freeze modifications restricted to documented bug-fix amendments logged with diff in hypothesis_amendments table.",
     "friction": FrictionModel().__dict__,
@@ -199,37 +200,35 @@ def main(mode: str, db: str = "psx.db") -> None:
 
     R = R.iloc[: SPEC["evaluation_sessions"]]
 
-    # Sector-neutral spread calculation across cohorts
-    sec_df = pd.read_sql_query("SELECT DISTINCT base_symbol AS symbol, sector FROM daily_quotes WHERE sector IS NOT NULL", conn)
+    # Sector-neutral spread calculation across cohorts via identical JT sleeve engine per SPEC
+    sec_df = pd.read_sql_query(
+        "SELECT DISTINCT base_symbol AS symbol, sector FROM daily_quotes WHERE sector IS NOT NULL AND sector != ''",
+        conn
+    )
     sec_map = dict(zip(sec_df["symbol"], sec_df["sector"]))
-    rets_raw = panel.adj_open.pct_change(fill_method=None).loc[R.index]
-    daily_sec_spreads = []
-    for dt, row in rets_raw.iterrows():
-        # Cohorts on this entry date
-        c_sub = cohorts[cohorts["entry_date"] == dt]
-        if c_sub.empty:
-            continue
-        q5_syms = c_sub.loc[c_sub["bucket"] == "Q5", "symbol"].tolist()
-        u_syms = c_sub["symbol"].tolist()
-        if not q5_syms or not u_syms:
-            continue
-        # Within-sector spreads
-        sec_spreads = []
-        for s in set(sec_map.get(sym) for sym in q5_syms if sym in sec_map):
-            q5_in_sec = [sym for sym in q5_syms if sec_map.get(sym) == s]
-            u_in_sec = [sym for sym in u_syms if sec_map.get(sym) == s]
-            r_q5_s = row[q5_in_sec].mean() if q5_in_sec else np.nan
-            r_u_s = row[u_in_sec].mean() if u_in_sec else np.nan
-            if pd.notna(r_q5_s) and pd.notna(r_u_s):
-                sec_spreads.append(r_q5_s - r_u_s)
-        if sec_spreads:
-            daily_sec_spreads.append(float(np.mean(sec_spreads)))
 
-    sec_neutral_mean = float(np.mean(daily_sec_spreads)) if daily_sec_spreads else 0.0
+    def sector_schedule(cohorts_df: pd.DataFrame, bucket: str, sector: str, sec_map_dict: dict) -> dict[str, list[str]]:
+        g = cohorts_df[cohorts_df["symbol"].map(sec_map_dict) == sector]
+        if bucket != "U":
+            g = g[g["bucket"] == bucket]
+        return {d: sorted(x["symbol"]) for d, x in g.groupby("entry_date")}
+
+    w = cohorts.loc[cohorts["bucket"] == "Q5", "symbol"].map(sec_map).dropna().value_counts(normalize=True)
+    if not w.empty:
+        S = sum(
+            float(ws) * (eng.run(sector_schedule(cohorts, "Q5", s, sec_map)).returns
+                         - eng.run(sector_schedule(cohorts, "U", s, sec_map)).returns)
+            for s, ws in w.items()
+        ).loc[R.index]
+        sec_neutral_mean = float(S.mean())
+    else:
+        sec_neutral_mean = 0.0
 
     primary_res = mean_test(R["Q5"] - R["U"], "less")
+    p_primary = primary_res["primary_EWC"]["p"]
+
     # Interpretation Gate evaluation
-    if primary_res["p_value"] < SPEC["alpha"]:
+    if p_primary < SPEC["alpha"]:
         if sec_neutral_mean < 0:
             classification = "CROWDING_EFFECT_CONFIRMED"
         else:
@@ -237,11 +236,18 @@ def main(mode: str, db: str = "psx.db") -> None:
     else:
         classification = "NULL_NOT_REJECTED"
 
+    # Missing cohort % & Degradation check
+    actual_cohort_days = cohorts["entry_date"].nunique()
+    missing_cohort_pct = max(0.0, 1.0 - (actual_cohort_days / SPEC["evaluation_sessions"]))
+    degradation_status = "DEGRADED" if missing_cohort_pct > SPEC["operational_rules"]["max_missing_cohort_pct"] else "NORMAL"
+
     result = {
         "primary": primary_res,
         "mr": mr_test(R[["Q1", "Q2", "Q3", "Q4", "Q5"]].to_numpy()),
         "sector_neutral_spread_mean": sec_neutral_mean,
         "classification": classification,
+        "degradation_status": degradation_status,
+        "missing_cohort_pct": missing_cohort_pct,
         "diagnostics": {
             b: {
                 "mean_invested": float(res[b].invested.mean()),

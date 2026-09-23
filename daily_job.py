@@ -20,7 +20,12 @@ logging.basicConfig(
 )
 log = logging.getLogger("daily_job")
 
-FREEZE_DATE = dt.date(2026, 10, 1)
+try:
+    from run_mts_h1 import SPEC
+    freeze_str = SPEC.get("freeze_date", "2026-10-01")
+    FREEZE_DATE = dt.date.fromisoformat(freeze_str)
+except Exception:
+    FREEZE_DATE = dt.date(2026, 10, 1)
 
 def send_alert(status: str, detail: str) -> None:
     # 1. Write local status file
@@ -66,14 +71,32 @@ def main() -> None:
         log.info("Today is %s (Weekend - PSX closed). Routine completed with no actions.", today.strftime("%A"))
         return
 
+    capture_failed = False
     # Step 1: Ingest perishable feeds (Quotes, FIPI/LIPI, NCCPL MTS report)
     log.info("Step 1: Ingesting daily perishable exchange feeds...")
     try:
         run_step(["psx_data_v2.py"], "CAPTURE_AND_INGEST_FEEDS")
     except Exception as e:
-        log.warning("Live feed ingestion had warnings/issues: %s", e)
+        capture_failed = True
+        log.error("Live feed ingestion failed: %s", e)
+        send_alert("WARNING_FEED_CAPTURE_FAILED", f"psx_data_v2.py capture encountered failure: {e}")
 
-    # Step 2: Pipeline Execution (Shadow mode pre-Oct 1, Live Evaluate post-Oct 1)
+    # Check feed freshness in database
+    import sqlite3
+    try:
+        conn = sqlite3.connect("psx.db")
+        latest_rd = conn.execute("SELECT max(report_date) FROM mts_snapshots").fetchone()[0]
+        if latest_rd:
+            rd_date = dt.date.fromisoformat(latest_rd)
+            days_old = (today - rd_date).days
+            if days_old > 4:  # >4 calendar days means >2 trading sessions stagnant
+                stale_msg = f"STALE_FEED: Latest report_date is {latest_rd} ({days_old} days old)."
+                log.warning(stale_msg)
+                send_alert("STALE_FEED_ALERT", stale_msg)
+    except Exception as e:
+        log.warning("Could not check feed freshness: %s", e)
+
+    # Step 2: Pipeline Execution (Shadow mode pre-freeze, Live Evaluate post-freeze)
     mode = "shadow" if today < FREEZE_DATE else "evaluate"
     log.info("Step 2: Executing pipeline in mode: %s (Freeze date: %s)", mode, FREEZE_DATE.isoformat())
     try:
@@ -90,9 +113,14 @@ def main() -> None:
         log.critical("Disaster recovery backup failed: %s", e)
         sys.exit(1)
 
-    ok_msg = f"Routine completed successfully.\nDate: {today.isoformat()}\nMode: {mode}\nTime: {dt.datetime.now().isoformat()}"
-    send_alert("OK", ok_msg)
-    log.info("=== DAILY RUN COMPLETED SUCCESSFULLY FOR %s ===", today.isoformat())
+    if capture_failed:
+        warn_msg = f"Routine completed with CAPTURE WARNINGS.\nDate: {today.isoformat()}\nMode: {mode}\nTime: {dt.datetime.now().isoformat()}"
+        send_alert("COMPLETED_WITH_CAPTURE_FAILURE", warn_msg)
+        log.warning("=== DAILY RUN COMPLETED WITH WARNINGS FOR %s ===", today.isoformat())
+    else:
+        ok_msg = f"Routine completed successfully.\nDate: {today.isoformat()}\nMode: {mode}\nTime: {dt.datetime.now().isoformat()}"
+        send_alert("OK", ok_msg)
+        log.info("=== DAILY RUN COMPLETED SUCCESSFULLY FOR %s ===", today.isoformat())
 
 if __name__ == "__main__":
     main()

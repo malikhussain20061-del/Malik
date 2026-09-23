@@ -39,7 +39,7 @@ RAW_DIR = Path("raw_archive")
 MW_URL = "https://dps.psx.com.pk/market-watch"
 FIPILIPI_URL = "https://www.scstrade.com/FIPILIPI.aspx/loadlipi"
 
-SUFFIXES = ("XD", "XB", "XR", "NC", "EX", "R", "BC")
+SUFFIXES = ("XDXB", "XDXR", "XBXR", "XD", "XB", "XR", "NC", "EX", "BC")
 
 HEADER_MAP = {
     "symbol": {"symbol", "scrip"},
@@ -65,6 +65,9 @@ def base_symbol(sym: str) -> str:
     for suf in sorted(SUFFIXES, key=len, reverse=True):
         if s.endswith(suf) and len(s) > len(suf):
             return s[:-len(suf)]
+    # Rights voucher handling: STLR -> STL, SGPLR -> SGPL (excludes genuine stocks ending in R)
+    if s.endswith("R") and len(s) >= 4 and s not in {"POWER", "HCAR", "MACTER", "DCR", "GTYR", "PAKQATAR", "NNAR"}:
+        return s[:-1]
     return s
 
 

@@ -127,29 +127,17 @@ class UnknownSymbolError(KeyError):
 
 
 def to_number(x) -> float:
-
     if x is None:
-
         return np.nan
-
-    s = str(x).strip().replace(",", "").replace("%", "").replace(" ", "")
-
+    s = re.sub(r"\s+", "", str(x).strip().replace(",", "").replace("%", ""))
     if s in ("", "-", "--", "N/A", "NA", "nil"):
-
         return np.nan
-
     neg = s.startswith("(") and s.endswith(")")
-
     s = s.strip("()")
-
     try:
-
         v = float(s)
-
     except ValueError:
-
         return np.nan
-
     return -v if neg else v
 
 
@@ -289,11 +277,12 @@ def parse_mts_pdf(pdf_path: str | Path, amount_tol: float = 0.01) -> tuple[pd.Da
         "grand_total": grand_total,
         "parsed_total": float(df["mts_amount"].sum())
     }
-    if grand_total is not None:
-        diff = abs(diag["parsed_total"] - grand_total)
-        max_diff = max(1.0, 1e-7 * abs(grand_total))
-        if diff > max_diff:
-            raise ParseIntegrityError(f"Amount reconciliation failed: parsed {diag['parsed_total']}, grand {grand_total}, diff {diff} > tol {max_diff}")
+    if grand_total is None:
+        raise ParseIntegrityError("Grand total row missing or unparsed in PDF; reconciliation cannot verify completeness")
+    diff = abs(diag["parsed_total"] - grand_total)
+    max_diff = max(1.0, 1e-7 * abs(grand_total))
+    if diff > max_diff:
+        raise ParseIntegrityError(f"Amount reconciliation failed: parsed {diag['parsed_total']}, grand {grand_total}, diff {diff} > tol {max_diff}")
     return df, diag
 
 
@@ -354,59 +343,44 @@ def ingest_report(conn: sqlite3.Connection, pdf_path: str | Path, report_date: s
 
     ts = pd.Timestamp(captured_at)
 
+    ts = pd.Timestamp(captured_at)
     if ts.tzinfo is None:
-
         raise ValueError("captured_at must be timezone-aware (e.g. 2026-09-22T18:05:00+05:00)")
 
-    rd = pd.Timestamp(report_date).strftime("%Y-%m-%d")
-
     blob = Path(pdf_path).read_bytes()
-
     sha = hashlib.sha256(blob).hexdigest()
 
-
-
-    row = conn.execute("SELECT report_date FROM mts_raw_reports WHERE sha256=?", (sha,)).fetchone()
-
-    if row is not None and row[0] != rd:
-
-        raise StaleReportError(f"PDF {sha[:12]} already archived as {row[0]}, not {rd}")
-
-    if row is None:
-
-        conn.execute("INSERT INTO mts_raw_reports VALUES (?,?,?,?,?)",
-
-                     (rd, ts.isoformat(), source_url, sha, blob))
-
-
-
-    existing = conn.execute("SELECT DISTINCT report_sha256 FROM mts_snapshots WHERE report_date=?",
-
-                            (rd,)).fetchall()
-
-    if existing:
-
-        if existing[0][0] != sha:
-
-            conn.execute("INSERT INTO mts_anomalies VALUES (?,?,?,?)",
-
-                         (rd, "*", "REVISION_IGNORED", f"first={existing[0][0][:12]} new={sha[:12]}"))
-
-            log.warning("Report %s revised; first capture kept (PIT).", rd)
-
-        conn.commit()
-
-        return pd.read_sql_query("SELECT * FROM mts_snapshots WHERE report_date=?", conn, params=(rd,))
-
-
-
+    # Step 1: Parse PDF first to extract authentic printed report_date and data
     df, diag = parse_mts_pdf(pdf_path)
     rd = diag["report_date"]
+    cap_date = ts.strftime("%Y-%m-%d")
+    if rd > cap_date:
+        raise ParseIntegrityError(f"Report date {rd} in PDF is in the future relative to capture date {cap_date}")
+
+    # Step 2: Check / archive raw report with authentic rd
+    row = conn.execute("SELECT report_date FROM mts_raw_reports WHERE sha256=?", (sha,)).fetchone()
+    if row is not None and row[0] != rd:
+        raise StaleReportError(f"PDF {sha[:12]} already archived as {row[0]}, not {rd}")
+    if row is None:
+        conn.execute("INSERT INTO mts_raw_reports VALUES (?,?,?,?,?)",
+                     (rd, ts.isoformat(), source_url, sha, blob))
+
+    # Step 3: Check existing PIT snapshot
+    existing = conn.execute("SELECT DISTINCT report_sha256 FROM mts_snapshots WHERE report_date=?",
+                            (rd,)).fetchall()
+    if existing:
+        if existing[0][0] != sha:
+            conn.execute(
+                "INSERT OR IGNORE INTO mts_anomalies(report_date, symbol, kind, detail) VALUES (?,?,?,?)",
+                (rd, "*", "REVISION_IGNORED", f"first={existing[0][0][:12]} new={sha[:12]}")
+            )
+            log.warning("Report %s revised; first capture kept (PIT).", rd)
+        conn.commit()
+        return pd.read_sql_query("SELECT * FROM mts_snapshots WHERE report_date=?", conn, params=(rd,))
+
     df["symbol"] = [sanitizer(s) for s in df["raw_symbol"]]
     dup = df["symbol"].duplicated(keep=False)
-
     if dup.any():
-
         raise ValueError(f"Duplicate symbols after sanitizing: {sorted(df.loc[dup, 'symbol'].unique())}")
 
     pct = df["open_pct"]
@@ -426,7 +400,10 @@ def ingest_report(conn: sqlite3.Connection, pdf_path: str | Path, report_date: s
         px_valid = chk_m["close"].notna()
         chk = v & px_valid
         for s in chk_m.loc[~chk, "symbol"]:
-            conn.execute("INSERT INTO mts_anomalies VALUES (?,?,?,?)", (rd, s, "PRICE_CHECK_SKIPPED", "vol=0 or missing close"))
+            conn.execute(
+                "INSERT OR IGNORE INTO mts_anomalies(report_date, symbol, kind, detail) VALUES (?,?,?,?)",
+                (rd, s, "PRICE_CHECK_SKIPPED", "vol=0 or missing close")
+            )
         if chk.sum() < 0.90 * len(df):
             raise ParseIntegrityError(f"Too many rows unverifiable in price check: {chk.sum()}/{len(df)}")
         implied_px = chk_m.loc[chk, "mts_amount"] / chk_m.loc[chk, "mts_volume"]
@@ -445,36 +422,22 @@ def ingest_report(conn: sqlite3.Connection, pdf_path: str | Path, report_date: s
                      df[cols].itertuples(index=False, name=None))
 
     _log_denominator_anomalies(conn, df, rd, denom_jump_tol)
-
     conn.commit()
-
     return df[cols]
 
-
-
-
-
 def _log_denominator_anomalies(conn, df, rd, tol):
-
     prev = pd.read_sql_query(
-
         "SELECT symbol, implied_denominator AS d_prev FROM mts_snapshots WHERE report_date="
-
         "(SELECT MAX(report_date) FROM mts_snapshots WHERE report_date < ?)", conn, params=(rd,))
-
     if prev.empty:
-
         return
-
     m = df[["symbol", "implied_denominator"]].merge(prev, on="symbol")
-
     jump = (m["implied_denominator"] / m["d_prev"] - 1.0).abs()
-
     for _, r in m[jump > tol].iterrows():
-
-        conn.execute("INSERT INTO mts_anomalies VALUES (?,?,?,?)",
-
-                     (rd, r.symbol, "DENOMINATOR_JUMP", f"{r.d_prev:.0f}->{r.implied_denominator:.0f}"))
+        conn.execute(
+            "INSERT OR IGNORE INTO mts_anomalies(report_date, symbol, kind, detail) VALUES (?,?,?,?)",
+            (rd, r.symbol, "DENOMINATOR_JUMP", f"{r.d_prev:.0f}->{r.implied_denominator:.0f}")
+        )
 
 
 

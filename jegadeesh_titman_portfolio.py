@@ -83,8 +83,12 @@ def build_adj_factor(quotes: pd.DataFrame, events: pd.DataFrame,
             ratio = val if (0 < val < 1.0) else (1.0 / val if val >= 1.0 else 1.0)
         elif kind == "bonus":
             val = float(ev.value)
-            bonus_pct = val if val < 1.0 else val / 100.0
-            ratio = 1.0 / (1.0 + bonus_pct)
+            if not (0 < val < 1.0):
+                raise ValueError(
+                    f"{ev.symbol} {ex_date_str}: bonus ratio {val} must be in range (0, 1.0) "
+                    f"(e.g. 0.05 for 5%, 0.20 for 20%). If >= 1.0, specify as split."
+                )
+            ratio = 1.0 / (1.0 + val)
         elif kind == "cash":
             cash_val = float(ev.value)
             dy = cash_val / prev["close"].iloc[-1]
@@ -140,8 +144,19 @@ def verify_corporate_actions_completeness(conn: sqlite3.Connection, freeze_date:
     """
     Verifies that every price gap exceeding 1 tick (0.011) on or after freeze_date
     has an accounted corporate action in corporate_actions.
-    Also flags any rights issues ('XR' tickers) which halt trading under protocol.
+    Also halts immediately if any rights issues ('XR' tickers) are detected.
     """
+    # 1. Explicit check for rights counter tickers (XR)
+    rights = pd.read_sql_query(
+        "SELECT DISTINCT base_symbol FROM daily_quotes WHERE trade_date >= ? AND symbol LIKE '%XR'",
+        conn, params=(freeze_date,)
+    )
+    if not rights.empty:
+        raise CorporateActionMissingError(
+            f"Trading halted: rights counter ('XR') detected on/after {freeze_date} for: {rights['base_symbol'].tolist()}"
+        )
+
+    # 2. Check for unaccounted gaps in spot equity quotes
     ca = pd.read_sql_query("SELECT base_symbol, ex_date FROM corporate_actions", conn)
     have = set(zip(ca["base_symbol"], ca["ex_date"]))
     q = pd.read_sql_query("""
@@ -149,7 +164,8 @@ def verify_corporate_actions_completeness(conn: sqlite3.Connection, freeze_date:
             SELECT base_symbol, symbol, trade_date, ldcp,
                    LAG(close) OVER (PARTITION BY base_symbol ORDER BY trade_date) AS prev_close
             FROM daily_quotes
-            WHERE is_final = 1 AND base_symbol NOT LIKE '%-%' AND symbol NOT LIKE '%R' AND symbol NOT LIKE '%R1'
+            WHERE is_final = 1 AND base_symbol NOT LIKE '%-%'
+              AND NOT (symbol != base_symbol AND (symbol LIKE '%R' OR symbol LIKE '%R1'))
         )
         SELECT * FROM q WHERE trade_date >= ? AND prev_close IS NOT NULL
     """, conn, params=(freeze_date,))
@@ -157,11 +173,9 @@ def verify_corporate_actions_completeness(conn: sqlite3.Connection, freeze_date:
         return
     gap = q["prev_close"] - q["ldcp"]
     bad = q[(gap.abs() > tick) & ~q.apply(lambda r: (r.base_symbol, r.trade_date) in have, axis=1)]
-    rights = q[q["symbol"].str.contains("XR", na=False)]
-    if not bad.empty or not rights.empty:
+    if not bad.empty:
         raise CorporateActionMissingError(
-            f"unaccounted gaps: {bad[['base_symbol','trade_date']].values.tolist()} "
-            f"rights: {rights['base_symbol'].unique().tolist()}"
+            f"unaccounted gaps: {bad[['base_symbol','trade_date']].values.tolist()}"
         )
 
 
