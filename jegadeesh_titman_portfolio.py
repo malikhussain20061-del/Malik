@@ -157,8 +157,12 @@ def verify_corporate_actions_completeness(conn: sqlite3.Connection, freeze_date:
         )
 
     # 2. Check for unaccounted gaps in spot equity quotes
-    ca = pd.read_sql_query("SELECT base_symbol, ex_date FROM corporate_actions", conn)
-    have = set(zip(ca["base_symbol"], ca["ex_date"]))
+    ca = pd.read_sql_query(
+        "SELECT action_id, base_symbol, ex_date, action_type, voids_action_id FROM corporate_actions", conn
+    )
+    voided = set(ca.loc[ca["action_type"] == "VOID", "voids_action_id"].dropna().astype(int))
+    ca_active = ca[(ca["action_type"] != "VOID") & (~ca["action_id"].isin(voided))]
+    have = set(zip(ca_active["base_symbol"], ca_active["ex_date"]))
     q = pd.read_sql_query("""
         WITH q AS (
             SELECT base_symbol, symbol, trade_date, ldcp,
@@ -199,10 +203,13 @@ def load_market_panel(conn: sqlite3.Connection, div_wht: float = 0.15) -> Market
     quotes["lower_limit"] = np.maximum(quotes["ldcp"] - np.maximum(0.10 * quotes["ldcp"], 1.00), 0.01)
 
     events_raw = pd.read_sql_query(
-        "SELECT base_symbol AS symbol, ex_date, action_type, amount, ratio FROM corporate_actions", conn
+        "SELECT action_id, base_symbol AS symbol, ex_date, action_type, amount, ratio, voids_action_id FROM corporate_actions", conn
     )
+    voided = set(events_raw.loc[events_raw["action_type"] == "VOID", "voids_action_id"].dropna().astype(int))
+    events_active = events_raw[(events_raw["action_type"] != "VOID") & (~events_raw["action_id"].isin(voided))]
+
     events_list = []
-    for _, r in events_raw.iterrows():
+    for _, r in events_active.iterrows():
         act = str(r["action_type"]).strip().lower()
         if act == "split":
             events_list.append({"symbol": r["symbol"], "ex_date": r["ex_date"], "kind": "split", "value": float(r["ratio"])})

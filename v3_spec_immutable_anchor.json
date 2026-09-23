@@ -1,8 +1,8 @@
 {
   "hypothesis_id": "MTS_CROWDING_XS_H10_V3",
-  "amendment_no": 10,
+  "amendment_no": 11,
   "status": "REGISTERED_PRE_DATA_FROZEN",
-  "spec_sha256": "870f68825b1bd6780acc104e91e9ad8a8c5abd5d4eaa796376de0f0db2f8637b",
+  "spec_sha256": "df20190705f81d51ef787c84dd7a7d1d126a7c8c5ad586f85c356a5786d6dedd",
   "spec": {
     "hypothesis_id": "MTS_CROWDING_XS_H10_V3",
     "test_number": 2,
@@ -35,7 +35,7 @@
       "corporate_actions_rule": "All corporate actions derived from Exchange LDCP gap detection (prev_close - ldcp) and ratio analysis. Pipeline halts if ex-suffix or LDCP gap occurs without matching event in corporate_actions."
     },
     "data_integrity_hashes": {
-      "corporate_actions_sha256": "f9f5d688627131ca1132643579aea2bb2b9e25ccf75d311cb86d71b41b0c4c9f",
+      "corporate_actions_sha256": "9bd574f028fcb00da3b3aa56b3bee942db2233964d950c27648595091d75c04f",
       "corporate_actions_count": 393,
       "mts_eligible_sha256": "d758bde4b123a4e685c9fcb597bd2d9c0dc25225d120035fb3d60d10c5dfa79d",
       "mts_eligible_count": 139
@@ -86,14 +86,16 @@
   },
   "code_sha256": {
     "mts_engine.py": "3a37e90a17482dc91782152a85fa712391410da74655672ada7253c1e3fe3433",
-    "jegadeesh_titman_portfolio.py": "0a5be711607da31315f0354b184cd170a197cbd098ce474d503aa46b498d43c8",
+    "jegadeesh_titman_portfolio.py": "16569da4d03f0f5292527b63735a238a01f61ee2aa47bca42c4bb0224f71cb8c",
     "econometric_audit.py": "b2d9d5ba5afa0874ca242029a96292a650d5412aa6a36abcadec7a0bd2d33e35",
-    "run_mts_h1.py": "032229e1db4fb6371fe7c9665c50c63b1ad3032de94b4fd32766a7373e1d0d8e",
+    "run_mts_h1.py": "fcf04e2c946d9ef32a820c34c59659de685f80a57100fc3223acbd013bf5a880",
     "psx_data_v2.py": "df8cfbf1aa83781f7ca43af7eae93a27f52a07f642013ffa16f374548bd50f06",
-    "daily_job.py": "03dd31960308f103f907d15335794b33e840d15251e5c625833f12072e7a3a07"
+    "daily_job.py": "03dd31960308f103f907d15335794b33e840d15251e5c625833f12072e7a3a07",
+    "ca_migration.py": "03ccaebe283b0d70ec9374e4d845b772b3c35c5c1f317057b38c554ed235ebb2",
+    "add_corporate_action.py": "eee3c60a5392797539f7ce35a37b66174e1f5e32784fbcfa91b3afad2adac208"
   },
   "data_sha256": {
-    "corporate_actions": "f9f5d688627131ca1132643579aea2bb2b9e25ccf75d311cb86d71b41b0c4c9f",
+    "corporate_actions": "9bd574f028fcb00da3b3aa56b3bee942db2233964d950c27648595091d75c04f",
     "mts_eligible": "d758bde4b123a4e685c9fcb597bd2d9c0dc25225d120035fb3d60d10c5dfa79d"
   }
 }

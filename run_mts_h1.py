@@ -26,7 +26,9 @@ CODE_FILES = [
     "econometric_audit.py",
     "run_mts_h1.py",
     "psx_data_v2.py",
-    "daily_job.py"
+    "daily_job.py",
+    "ca_migration.py",
+    "add_corporate_action.py"
 ]
 
 QUOTES_SQL = "SELECT trade_date AS date, base_symbol AS symbol, close, volume FROM daily_quotes WHERE is_final=1 AND close > 0"
@@ -63,7 +65,7 @@ SPEC = {
         "corporate_actions_rule": "All corporate actions derived from Exchange LDCP gap detection (prev_close - ldcp) and ratio analysis. Pipeline halts if ex-suffix or LDCP gap occurs without matching event in corporate_actions."
     },
     "data_integrity_hashes": {
-        "corporate_actions_sha256": "f9f5d688627131ca1132643579aea2bb2b9e25ccf75d311cb86d71b41b0c4c9f",
+        "corporate_actions_sha256": "9bd574f028fcb00da3b3aa56b3bee942db2233964d950c27648595091d75c04f",
         "corporate_actions_count": 393,
         "mts_eligible_sha256": "d758bde4b123a4e685c9fcb597bd2d9c0dc25225d120035fb3d60d10c5dfa79d",
         "mts_eligible_count": 139
@@ -208,6 +210,14 @@ def main(mode: str, db: str = "psx.db") -> None:
             f"Data integrity violation: mts_eligible universe tampered! "
             f"Count={el_cnt} (exp {exp_el_cnt}), SHA={el_hash} (exp {exp_el_hash})"
         )
+
+    # 4. Mandatory append-only triggers integrity check
+    trg = dict(conn.execute(
+        "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name='corporate_actions'"
+    ).fetchall())
+    expected_triggers = {"ca_no_update", "ca_no_delete", "ca_no_replace"}
+    if not expected_triggers <= trg.keys() or any("RAISE(ABORT" not in trg[k] for k in expected_triggers):
+        raise SystemExit("Data integrity violation: corporate_actions append-only triggers missing or altered!")
 
     cfg = SignalConfig(
         min_volume=SPEC["universe"]["min_volume"],
