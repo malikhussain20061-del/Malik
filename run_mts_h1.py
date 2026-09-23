@@ -111,10 +111,11 @@ SPEC = {
 BUCKETS = ["Q0", "Q1", "Q2", "Q3", "Q4", "Q5", "U"]
 
 
-def table_sha256(conn: sqlite3.Connection, table: str) -> tuple[str, int]:
-    rows = conn.execute(f"SELECT * FROM {table} ORDER BY 1,2,3").fetchall()
-    h = hashlib.sha256(json.dumps(rows, default=str).encode("utf-8")).hexdigest()
-    return h, len(rows)
+def table_sha256(conn: sqlite3.Connection, table: str, where: str = "", params: tuple = ()) -> tuple[str, int]:
+    ncol = len(conn.execute(f"PRAGMA table_info({table})").fetchall())
+    order = ",".join(str(i) for i in range(1, ncol + 1))
+    rows = conn.execute(f"SELECT * FROM {table} {where} ORDER BY {order}", params).fetchall()
+    return hashlib.sha256(json.dumps(rows, default=str).encode("utf-8")).hexdigest(), len(rows)
 
 
 def main(mode: str, db: str = "psx.db") -> None:
@@ -180,18 +181,33 @@ def main(mode: str, db: str = "psx.db") -> None:
         raise SystemExit(f"Registration mismatch: {chk}")
 
     # Runtime data integrity verification: guard against post-freeze data tampering
-    for tbl, key_hash, key_cnt in [
-        ("corporate_actions", "corporate_actions_sha256", "corporate_actions_count"),
-        ("mts_eligible", "mts_eligible_sha256", "mts_eligible_count")
-    ]:
-        cur_hash, cur_cnt = table_sha256(conn, tbl)
-        exp_hash = SPEC["data_integrity_hashes"][key_hash]
-        exp_cnt = SPEC["data_integrity_hashes"][key_cnt]
-        if cur_hash != exp_hash or cur_cnt != exp_cnt:
-            raise SystemExit(
-                f"Data integrity violation: {tbl} tampered or altered! "
-                f"Count={cur_cnt} (exp {exp_cnt}), SHA={cur_hash} (exp {exp_hash})"
-            )
+    # 1. Historical corporate actions partition (< freeze_date): frozen and tamper-proof
+    ca_hash, ca_cnt = table_sha256(conn, "corporate_actions", "WHERE ex_date < ?", (SPEC["freeze_date"],))
+    exp_ca_hash = SPEC["data_integrity_hashes"]["corporate_actions_sha256"]
+    exp_ca_cnt = SPEC["data_integrity_hashes"]["corporate_actions_count"]
+    if ca_hash != exp_ca_hash or ca_cnt != exp_ca_cnt:
+        raise SystemExit(
+            f"Data integrity violation: corporate_actions historical partition (< {SPEC['freeze_date']}) tampered! "
+            f"Count={ca_cnt} (exp {exp_ca_cnt}), SHA={ca_hash} (exp {exp_ca_hash})"
+        )
+
+    # 2. Forward corporate actions (>= freeze_date): must have valid source and ingest_ts
+    fwd_invalid = conn.execute(
+        "SELECT COUNT(*) FROM corporate_actions WHERE ex_date >= ? AND (source IS NULL OR source = '' OR ingest_ts IS NULL)",
+        (SPEC["freeze_date"],)
+    ).fetchone()[0]
+    if fwd_invalid > 0:
+        raise SystemExit(f"Data integrity violation: {fwd_invalid} forward corporate actions lack source or ingest_ts provenance!")
+
+    # 3. MTS eligible universe: permanently fixed for entire forward evaluation
+    el_hash, el_cnt = table_sha256(conn, "mts_eligible")
+    exp_el_hash = SPEC["data_integrity_hashes"]["mts_eligible_sha256"]
+    exp_el_cnt = SPEC["data_integrity_hashes"]["mts_eligible_count"]
+    if el_hash != exp_el_hash or el_cnt != exp_el_cnt:
+        raise SystemExit(
+            f"Data integrity violation: mts_eligible universe tampered! "
+            f"Count={el_cnt} (exp {exp_el_cnt}), SHA={el_hash} (exp {exp_el_hash})"
+        )
 
     cfg = SignalConfig(
         min_volume=SPEC["universe"]["min_volume"],

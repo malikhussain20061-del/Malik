@@ -96,6 +96,7 @@ def main() -> None:
     except Exception as e:
         log.warning("Could not check feed freshness: %s", e)
 
+    had_gap = False
     # Check if GAP was detected in today's ingest run
     try:
         conn = sqlite3.connect("psx.db")
@@ -104,6 +105,7 @@ def main() -> None:
             (today.isoformat(),)
         ).fetchone()[0]
         if gap_count:
+            had_gap = True
             gap_msg = f"GAP_DETECTED on {today.isoformat()}: Missed trading session detected in DPS feed. Intermediate day must be backfilled from official PSX closing sheet before next T+2 entry."
             log.warning(gap_msg)
             send_alert("GAP_DETECTED", gap_msg)
@@ -142,6 +144,10 @@ def main() -> None:
         warn_msg = f"Routine completed with CAPTURE WARNINGS.\nDate: {today.isoformat()}\nMode: {mode}\nTime: {dt.datetime.now().isoformat()}"
         send_alert("COMPLETED_WITH_CAPTURE_FAILURE", warn_msg)
         log.warning("=== DAILY RUN COMPLETED WITH WARNINGS FOR %s ===", today.isoformat())
+    elif had_gap:
+        gap_summary = f"Routine completed with GAP WARNING.\nDate: {today.isoformat()}\nMode: {mode}\nTime: {dt.datetime.now().isoformat()}\nMissed session must be backfilled from PSX closing sheet."
+        send_alert("COMPLETED_WITH_GAP", gap_summary)
+        log.warning("=== DAILY RUN COMPLETED WITH GAP DETECTED FOR %s ===", today.isoformat())
     else:
         ok_msg = f"Routine completed successfully.\nDate: {today.isoformat()}\nMode: {mode}\nTime: {dt.datetime.now().isoformat()}"
         send_alert("OK", ok_msg)

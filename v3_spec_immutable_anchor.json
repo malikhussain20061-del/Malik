@@ -88,9 +88,9 @@
     "mts_engine.py": "3a37e90a17482dc91782152a85fa712391410da74655672ada7253c1e3fe3433",
     "jegadeesh_titman_portfolio.py": "0a5be711607da31315f0354b184cd170a197cbd098ce474d503aa46b498d43c8",
     "econometric_audit.py": "b2d9d5ba5afa0874ca242029a96292a650d5412aa6a36abcadec7a0bd2d33e35",
-    "run_mts_h1.py": "fe81a704077b393a7b8790bea4408c2d730b198d3a84d64162e447595e2ee3a8",
+    "run_mts_h1.py": "032229e1db4fb6371fe7c9665c50c63b1ad3032de94b4fd32766a7373e1d0d8e",
     "psx_data_v2.py": "df8cfbf1aa83781f7ca43af7eae93a27f52a07f642013ffa16f374548bd50f06",
-    "daily_job.py": "313f5420c8fb92b3da0024108dae59fc4778daf3bd8191254dd597e681bdf81f"
+    "daily_job.py": "03dd31960308f103f907d15335794b33e840d15251e5c625833f12072e7a3a07"
   },
   "data_sha256": {
     "corporate_actions": "f9f5d688627131ca1132643579aea2bb2b9e25ccf75d311cb86d71b41b0c4c9f",
