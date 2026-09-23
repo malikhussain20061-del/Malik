@@ -39,7 +39,7 @@ RAW_DIR = Path("raw_archive")
 MW_URL = "https://dps.psx.com.pk/market-watch"
 FIPILIPI_URL = "https://www.scstrade.com/FIPILIPI.aspx/loadlipi"
 
-SUFFIXES = ("XDXB", "XDXR", "XBXR", "XD", "XB", "XR", "NC", "EX", "BC")
+EX_SUFFIXES = ("XDXB", "XDXR", "XBXR", "XD", "XB", "XR")
 
 HEADER_MAP = {
     "symbol": {"symbol", "scrip"},
@@ -59,16 +59,43 @@ class FeedError(RuntimeError):
     """Feed unavailable ya malformed. Yeh exception KABHI silently swallow na karein."""
 
 
-def base_symbol(sym: str) -> str:
-    """LUCKXD -> LUCK, SYSXB -> SYS (Normalization prevents fragmented time series)."""
+def base_symbol(sym: str, known: set[str] | None = None) -> str:
+    """LUCKXD -> LUCK, SYSXB -> SYS. Preserves genuine symbols like BLUEX, DCR, and right letters like STLR."""
     s = sym.upper().strip()
-    for suf in sorted(SUFFIXES, key=len, reverse=True):
-        if s.endswith(suf) and len(s) > len(suf):
-            return s[:-len(suf)]
-    # Rights voucher handling: STLR -> STL, SGPLR -> SGPL (excludes genuine stocks ending in R)
-    if s.endswith("R") and len(s) >= 4 and s not in {"POWER", "HCAR", "MACTER", "DCR", "GTYR", "PAKQATAR", "NNAR"}:
-        return s[:-1]
+    if known and s in known:
+        return s
+    for suf in EX_SUFFIXES:
+        if s.endswith(suf):
+            cand = s[:-len(suf)]
+            if not known or cand in known:
+                return cand
     return s
+
+
+def session_status(con: sqlite3.Connection, rows: list[dict], today: str) -> str:
+    """Detects weekend or exchange holiday ghost sessions where DPS still serves prior session."""
+    last_row = con.execute("SELECT max(trade_date) FROM daily_quotes WHERE is_final=1 AND trade_date < ?", (today,)).fetchone()
+    if not last_row or not last_row[0]:
+        return "NEW"
+    last = last_row[0]
+    prev = {r[0]: (r[1], r[2]) for r in con.execute(
+        "SELECT symbol, close, volume FROM daily_quotes WHERE trade_date=? AND is_final=1", (last,))}
+    same = adv = n = 0
+    for r in rows:
+        p = prev.get(r.get("symbol"))
+        if p is None or r.get("close") is None or r.get("ldcp") is None:
+            continue
+        n += 1
+        same += abs(r["close"] - p[0]) < 1e-9 and r.get("volume", 0.0) == p[1]
+        adv += abs(r["ldcp"] - p[0]) <= 0.011
+    if n == 0:
+        raise FeedError("no overlap with last session")
+    if same / n > 0.9:
+        return "NO_SESSION"  # page still shows last session: weekend or holiday
+    if adv / n < 0.8:
+        raise FeedError(f"ldcp does not match {last} close: missed a session or bad page")
+    return "NEW"
+
 
 
 def archive_raw(feed: str, content: bytes) -> str:
@@ -287,7 +314,21 @@ def fetch_market_watch(timeout: int = 20) -> tuple[list[dict], str]:
 def upsert_quotes(con: sqlite3.Connection, rows: list[dict], is_final: bool) -> int:
     """
     UPSERT: Final evening close always wins; midday partial never overwrites final.
+    Guarded by session_status against weekend/holiday ghost sessions.
     """
+    if not rows:
+        return 0
+
+    today = rows[0].get("trade_date") or dt.datetime.now(PKT).date().isoformat()
+    status = session_status(con, rows, today)
+    if status == "NO_SESSION":
+        log_run(con, "market_watch", "HOLIDAY", 0)
+        print(f" [i] Market Watch matches previous session (>90% identical). Detected HOLIDAY/WEEKEND ({today}). 0 quotes inserted.")
+        return 0
+
+    # Load known base symbols for safe base_symbol stripping
+    known = set(r[0] for r in con.execute("SELECT DISTINCT base_symbol FROM daily_quotes WHERE base_symbol IS NOT NULL").fetchall())
+
     sql = """
     INSERT INTO daily_quotes (
         trade_date, symbol, base_symbol, sector, market,
@@ -309,7 +350,7 @@ def upsert_quotes(con: sqlite3.Connection, rows: list[dict], is_final: bool) -> 
     prepared = []
     for r in rows:
         r_copy = dict(r)
-        r_copy["base_symbol"] = base_symbol(r_copy["symbol"])
+        r_copy["base_symbol"] = base_symbol(r_copy["symbol"], known=known)
         r_copy["is_final"] = 1 if is_final else 0
         r_copy["quality_flags"] = validate_row(r_copy)
         r_copy["ingest_ts"] = now
@@ -398,12 +439,12 @@ def fetch_and_store_fipi_lipi(con: sqlite3.Connection, target_date: dt.date | No
 
 
 MTS_PDF_URL = "http://www.scstrade.com/research/Research%20Reports/General/MTS%20Report.pdf"
-BACKUP_DIR = Path("backups")
+
 
 def fetch_and_store_mts(con: sqlite3.Connection) -> int:
     """
     Captures Perishable NCCPL Daily Per-Symbol MTS Outstanding.
-    Extracts Symbol, Open MTS Volume, and Open MTS Amount from daily clearing report.
+    Delegates ingestion and validation to hardened mts_engine.ingest_report (single source of truth).
     """
     req = urllib.request.Request(MTS_PDF_URL, headers={"User-Agent": "Mozilla/5.0"})
     try:
@@ -415,111 +456,52 @@ def fetch_and_store_mts(con: sqlite3.Connection) -> int:
 
     import pymupdf
     import re
-    doc = pymupdf.open(stream=raw_bytes, filetype="pdf")
-    
+    try:
+        doc = pymupdf.open(stream=raw_bytes, filetype="pdf")
+    except Exception as e:
+        log_run(con, "mts_report", "FAILED", 0, error=f"Corrupt PDF: {e}", sha=sha)
+        raise FeedError(f"Corrupt MTS PDF: {e}") from e
+
     # Page 0 has report date: e.g. "September 11, 2026"
     p0_text = doc[0].get_text()
     date_match = re.search(r'([A-Za-z]+ \d{1,2}, \d{4})', p0_text)
-    if date_match:
-        try:
-            report_dt = dt.datetime.strptime(date_match.group(1), "%B %d, %Y").date()
-            trade_date_iso = report_dt.isoformat()
-        except Exception:
-            trade_date_iso = dt.datetime.now(PKT).date().isoformat()
-    else:
-        trade_date_iso = dt.datetime.now(PKT).date().isoformat()
+    if not date_match:
+        log_run(con, "mts_report", "FAILED", 0, error="Could not parse report date in Page 0", sha=sha)
+        raise FeedError("Failed to parse report date from MTS PDF Page 0")
+
+    try:
+        report_dt = dt.datetime.strptime(date_match.group(1), "%B %d, %Y").date()
+        trade_date_iso = report_dt.isoformat()
+    except Exception as e:
+        log_run(con, "mts_report", "FAILED", 0, error=f"Invalid date format: {e}", sha=sha)
+        raise FeedError(f"Invalid date format in MTS PDF: {date_match.group(1)}") from e
 
     now = dt.datetime.now(PKT).isoformat(timespec="seconds")
-    rows = []
-    # Tables on Page 1 and 2 contain Symbol Code, Open MTS, Current Day MTS, Net Open MTS
-    for pno in [1, 2]:
-        if pno >= len(doc):
-            break
-        tables = doc[pno].find_tables()
-        for tab in tables:
-            grid = tab.extract()
-            for r in grid[1:]:
-                # Table has 15 columns; Symbol is at index 2
-                if len(r) >= 14 and r[2] and r[2].strip():
-                    sym = r[2].strip().upper()
-                    try:
-                        # Net Open MTS Volume/Amount (Col 11 & 12) is the true EOD outstanding position
-                        net_vol = float(str(r[11]).replace(',', '').strip())
-                        net_amt = float(str(r[12]).replace(',', '').strip())
-                        # Current Day MTS Volume/Amount (Col 8 & 9) is the fresh financing today
-                        new_vol = float(str(r[8]).replace(',', '').strip())
-                        new_amt = float(str(r[9]).replace(',', '').strip())
-                        # Weighted Average financing rate % (Col 10)
-                        w_rate = float(str(r[10]).replace(',', '').strip())
-                        # MTS Open Percentage of float/capital (Col 13)
-                        open_pct = float(str(r[13]).replace(',', '').strip())
-                        base_sym = base_symbol(sym)
-                        rows.append((trade_date_iso, sym, base_sym, net_vol, net_amt, new_vol, new_amt, w_rate, open_pct, now))
-                    except Exception:
-                        continue
 
-    if not rows:
-        log_run(con, "mts_report", "EMPTY", 0, error="Could not extract MTS rows", sha=sha)
-        return 0
-
-    # Write temporary file to pass to hardened mts_engine.ingest_report
+    # Ingest directly through hardened mts_engine into mts_snapshots
     tmp_pdf = RAW_DIR / f"temp_mts_{sha[:8]}.pdf"
     try:
         tmp_pdf.write_bytes(raw_bytes)
-        try:
-            import mts_engine
-            mts_engine.ingest_report(
-                con,
-                tmp_pdf,
-                report_date=trade_date_iso,
-                captured_at=now,
-                sanitizer=base_symbol,
-                source_url=MTS_PDF_URL
-            )
-        except Exception as e_engine:
-            # If report is from an earlier date or stale, log it
-            log_run(con, "mts_engine_ingest", "WARNING", 0, error=str(e_engine), sha=sha)
+        import mts_engine
+        known = set(r[0] for r in con.execute("SELECT DISTINCT base_symbol FROM daily_quotes WHERE base_symbol IS NOT NULL").fetchall())
+        sanitizer = mts_engine.SymbolSanitizer(known)
+        df_ingested = mts_engine.ingest_report(
+            con,
+            tmp_pdf,
+            report_date=trade_date_iso,
+            captured_at=now,
+            sanitizer=sanitizer,
+            source_url=MTS_PDF_URL
+        )
+        count = len(df_ingested)
+        log_run(con, "mts_report", "SUCCESS", count, sha=sha)
+        return count
+    except Exception as e_engine:
+        log_run(con, "mts_report", "FAILED", 0, error=str(e_engine), sha=sha)
+        raise FeedError(f"MTS ingest error: {e_engine}") from e_engine
     finally:
         if tmp_pdf.exists():
             tmp_pdf.unlink()
-
-    sql = """
-    INSERT INTO mts_quotes (
-        trade_date, symbol, base_symbol, mts_volume, mts_amount,
-        new_mts_volume, new_mts_amount, weighted_rate, open_pct, ingest_ts
-    )
-    VALUES (?,?,?,?,?,?,?,?,?,?)
-    ON CONFLICT(trade_date, symbol) DO UPDATE SET
-        mts_volume=excluded.mts_volume,
-        mts_amount=excluded.mts_amount,
-        new_mts_volume=excluded.new_mts_volume,
-        new_mts_amount=excluded.new_mts_amount,
-        weighted_rate=excluded.weighted_rate,
-        open_pct=excluded.open_pct,
-        ingest_ts=excluded.ingest_ts;
-    """
-    con.executemany(sql, rows)
-    con.commit()
-    log_run(con, "mts_report", "SUCCESS", len(rows), sha=sha)
-    return len(rows)
-
-
-def create_automated_backup() -> str | None:
-    """
-    Disaster Recovery: Creates a compressed zip backup of psx.db into backups/ folder.
-    """
-    BACKUP_DIR.mkdir(exist_ok=True)
-    stamp = dt.datetime.now(PKT).strftime("%Y%m%d_%H%M%S")
-    backup_file = BACKUP_DIR / f"psx_backup_{stamp}.zip"
-    import zipfile
-    try:
-        with zipfile.ZipFile(backup_file, 'w', zipfile.ZIP_DEFLATED) as zf:
-            if os.path.exists(DB_PATH):
-                zf.write(DB_PATH, arcname="psx.db")
-        return str(backup_file)
-    except Exception as e:
-        print(f"[!] Backup error: {e}")
-        return None
 
 
 def missing_days(con: sqlite3.Connection, since: str) -> list[str]:
@@ -546,6 +528,7 @@ if __name__ == "__main__":
     print("      PSX POINT-IN-TIME DATA LAYER V2 — INSTITUTIONAL AUDIT ENGINE")
     print("=" * 80)
     con = init_db()
+    critical_failure = False
 
     # 1. Ingest Daily Quotes with UPSERT & Raw Gzip Archiving
     print("\n[*] [1/3] Ingesting PSX Market Watch Snapshot...")
@@ -553,11 +536,13 @@ if __name__ == "__main__":
     try:
         rows, sha = fetch_market_watch()
         n_quotes = upsert_quotes(con, rows, is_final=is_evening)
-        log_run(con, "market_watch", "SUCCESS", n_quotes, sha=sha)
-        print(f" [+] Success: {n_quotes} quotes upserted (is_final={is_evening}) | Raw SHA: {sha[:10]}...")
+        if n_quotes > 0:
+            log_run(con, "market_watch", "SUCCESS", n_quotes, sha=sha)
+            print(f" [+] Success: {n_quotes} quotes upserted (is_final={is_evening}) | Raw SHA: {sha[:10]}...")
     except FeedError as e:
+        critical_failure = True
         log_run(con, "market_watch", "FAILED", 0, error=str(e))
-        print(f" [!] Feed Error: {e}")
+        print(f" [!] Feed Error on Market Watch: {e}")
 
     # 2. Ingest Perishable NCCPL FIPI / LIPI Flows
     print("\n[*] [2/3] Ingesting Perishable NCCPL FIPI/LIPI Institutional Flows...")
@@ -572,21 +557,20 @@ if __name__ == "__main__":
     try:
         n_mts = fetch_and_store_mts(con)
         print(f" [+] Success: {n_mts} stocks MTS leverage positions archived!")
+    except FeedError as e:
+        critical_failure = True
+        print(f" [!] Feed Error on MTS: {e}")
     except Exception as e:
+        critical_failure = True
         print(f" [!] Note on MTS: {e}")
 
-    # 4. Automated Backup (Disaster Recovery Insurance)
-    backup_path = create_automated_backup()
-    if backup_path:
-        print(f"\n [🛡️] Automated Disaster Recovery Backup Created: {backup_path}")
-
-    # 5. Audit Check
+    # 4. Audit Check
     total_q = con.execute("SELECT count(*) FROM daily_quotes").fetchone()[0]
     total_f = con.execute("SELECT count(*) FROM fipi_lipi").fetchone()[0]
-    total_m = con.execute("SELECT count(*) FROM mts_quotes").fetchone()[0]
+    total_m = con.execute("SELECT count(*) FROM mts_snapshots").fetchone()[0]
     runs = con.execute("SELECT count(*) FROM ingest_runs").fetchone()[0]
     print("\n" + "─" * 80)
-    print(f" 📊 DATABASE STATUS: {total_q:,} Quotes | {total_f:,} FIPI/LIPI Rows | {total_m:,} MTS Rows | {runs} Audit Runs Logged")
+    print(f" 📊 DATABASE STATUS: {total_q:,} Quotes | {total_f:,} FIPI/LIPI Rows | {total_m:,} MTS Snapshots | {runs} Audit Runs Logged")
     
     # Check for gaps since beginning of month
     since_date = dt.date.today().replace(day=1).isoformat()
@@ -596,3 +580,8 @@ if __name__ == "__main__":
     else:
         print(f" ✅ Zero data gaps detected since {since_date}.")
     print("=" * 80 + "\n")
+
+    if critical_failure:
+        print(" [!] CRITICAL FEED FAILURE: Exiting with status code 2.")
+        sys.exit(2)
+

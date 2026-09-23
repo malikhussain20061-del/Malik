@@ -45,7 +45,7 @@ SPEC = {
         "missing_report": "no cohort"
     },
     "universe": {
-        "eligible": "PSX liquid proxy universe (139 symbols meeting session>=190, vol>=50k, close>=10, plus core MTS) until official NCCPL semi-annual circular is formally ingested (source in 'NCCPL_OFFICIAL', 'PSX_LIQUID_PROXY_139')",
+        "eligible": "PSX_LIQUID_PROXY_139 (fixed 139 symbols meeting session>=190, vol>=50k, close>=10, plus core MTS). Locked for entire evaluation; no mid-run universe substitution.",
         "min_volume": 50000,
         "min_price": 10.0,
         "min_names": 25,
@@ -148,13 +148,20 @@ def main(mode: str, db: str = "psx.db") -> None:
             min_financed=SPEC["signal"]["min_financed"]
         )
         signal = load_signal_panel(conn, SPEC["signal"]["column"])
-        cohorts = build_cohorts(signal, quotes, cfg)
+        raw_cohorts = build_cohorts(signal, quotes, cfg)
+        cohorts = enforce_publication_lag(
+            raw_cohorts,
+            panel.sessions,
+            SPEC["timing"]["entry_lag_sessions"],
+            SPEC["timing"]["open_time_pkt"]
+        )
         print(f"Total formation dates in signal: {signal['report_date'].nunique()}")
-        print(f"Total cohort dates formed: {cohorts['formation_date'].nunique()}")
+        print(f"Raw cohorts formed: {raw_cohorts['formation_date'].nunique() if not raw_cohorts.empty else 0} dates, {len(raw_cohorts)} symbol-cohort rows")
+        print(f"Cohorts surviving publication lag: {cohorts['formation_date'].nunique() if not cohorts.empty else 0} dates, {len(cohorts)} symbol-cohort rows")
         if not cohorts.empty:
             latest_fd = cohorts["formation_date"].max()
             c_latest = cohorts[cohorts["formation_date"] == latest_fd]
-            print(f"Latest cohort [{latest_fd}] bucket counts: {c_latest['bucket'].value_counts().to_dict()}")
+            print(f"Latest surviving cohort [{latest_fd}] bucket counts: {c_latest['bucket'].value_counts().to_dict()}")
         anom = pd.read_sql_query("SELECT * FROM mts_anomalies ORDER BY report_date DESC LIMIT 5", conn)
         print("Recent anomalies logged in mts_anomalies:")
         print(anom)
@@ -187,7 +194,9 @@ def main(mode: str, db: str = "psx.db") -> None:
     starts = [r.valid_from for r in res.values()]
 
     if any(s is None for s in starts):
-        raise SystemExit("Warm-up incomplete.")
+        logging.info("Warm-up incomplete: sleeves still accumulating initial positions. Standby.")
+        print("Warm-up incomplete: waiting for initial K sessions.")
+        return
 
     R = pd.DataFrame({b: res[b].returns for b in BUCKETS}).loc[max(starts):]
     n = len(R)
@@ -215,11 +224,16 @@ def main(mode: str, db: str = "psx.db") -> None:
 
     w = cohorts.loc[cohorts["bucket"] == "Q5", "symbol"].map(sec_map).dropna().value_counts(normalize=True)
     if not w.empty:
-        S = sum(
-            float(ws) * (eng.run(sector_schedule(cohorts, "Q5", s, sec_map)).returns
-                         - eng.run(sector_schedule(cohorts, "U", s, sec_map)).returns)
-            for s, ws in w.items()
-        ).loc[R.index]
+        S_components = []
+        for s, ws in w.items():
+            q5s = sector_schedule(cohorts, "Q5", s, sec_map)
+            us_all = sector_schedule(cohorts, "U", s, sec_map)
+            # Eliminate mechanical negative cash bias: restrict U sleeve to days when Q5 has active positions
+            us = {d: us_all[d] for d in q5s if d in us_all}
+            ret_q5 = eng.run(q5s).returns
+            ret_u = eng.run(us).returns
+            S_components.append(float(ws) * (ret_q5 - ret_u))
+        S = sum(S_components).loc[R.index]
         sec_neutral_mean = float(S.mean())
     else:
         sec_neutral_mean = 0.0
@@ -236,9 +250,10 @@ def main(mode: str, db: str = "psx.db") -> None:
     else:
         classification = "NULL_NOT_REJECTED"
 
-    # Missing cohort % & Degradation check
-    actual_cohort_days = cohorts["entry_date"].nunique()
-    missing_cohort_pct = max(0.0, 1.0 - (actual_cohort_days / SPEC["evaluation_sessions"]))
+    # Missing cohort % & Degradation check (strictly over evaluated session window)
+    cohorts_in_window = cohorts[cohorts["entry_date"].isin(R.index)]
+    actual_cohort_days = cohorts_in_window["entry_date"].nunique()
+    missing_cohort_pct = max(0.0, 1.0 - (actual_cohort_days / len(R.index)))
     degradation_status = "DEGRADED" if missing_cohort_pct > SPEC["operational_rules"]["max_missing_cohort_pct"] else "NORMAL"
 
     result = {

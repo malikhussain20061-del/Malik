@@ -1,8 +1,8 @@
 {
   "hypothesis_id": "MTS_CROWDING_XS_H10_V3",
-  "amendment_no": 7,
+  "amendment_no": 8,
   "status": "REGISTERED_PRE_DATA_FROZEN",
-  "spec_sha256": "2b82d90d536b8084757d94191ed6ab71fbd8217bb3a55c810fe8d4193372f717",
+  "spec_sha256": "120b2a702931aec6a572a467c7b576ec37f18996b479b38bcbe3509fe23bd2e0",
   "spec": {
     "hypothesis_id": "MTS_CROWDING_XS_H10_V3",
     "test_number": 2,
@@ -19,7 +19,7 @@
       "missing_report": "no cohort"
     },
     "universe": {
-      "eligible": "PSX liquid proxy universe (139 symbols meeting session>=190, vol>=50k, close>=10, plus core MTS) until official NCCPL semi-annual circular is formally ingested (source in 'NCCPL_OFFICIAL', 'PSX_LIQUID_PROXY_139')",
+      "eligible": "PSX_LIQUID_PROXY_139 (fixed 139 symbols meeting session>=190, vol>=50k, close>=10, plus core MTS). Locked for entire evaluation; no mid-run universe substitution.",
       "min_volume": 50000,
       "min_price": 10.0,
       "min_names": 25,
@@ -86,14 +86,14 @@
   },
   "code_sha256": {
     "mts_engine.py": "3a37e90a17482dc91782152a85fa712391410da74655672ada7253c1e3fe3433",
-    "jegadeesh_titman_portfolio.py": "690cb1b6e19b49731f47f2315e9e0f79c1135aeb51907346fc88e994023cb37f",
+    "jegadeesh_titman_portfolio.py": "0a5be711607da31315f0354b184cd170a197cbd098ce474d503aa46b498d43c8",
     "econometric_audit.py": "b2d9d5ba5afa0874ca242029a96292a650d5412aa6a36abcadec7a0bd2d33e35",
-    "run_mts_h1.py": "269525301952e6e50e735ebf8c7e0f05c8761e311c386863865d37d8adfb1d7f",
-    "psx_data_v2.py": "b89f0a9ac95d4b5c3bcbb2cadd0b236d25090bebd3c79edc605a7569ee54beca",
-    "daily_job.py": "d2cbfcb22c7c8024a72a53c3c12a215c1aa06f6111d6d7241601ff1cacca1feb"
+    "run_mts_h1.py": "99519fcbee155bec761af34b5ad9660f16b6542fc663baadb4d52a47bf200006",
+    "psx_data_v2.py": "45894672039ee2c722122f9f07dfd2ae443d899915fb6fd3c558548b0f31c42b",
+    "daily_job.py": "2807742d5764ddd9522d6bd5c6d12bf885035bf46be08569935c4fe8759d02f8"
   },
   "data_sha256": {
-    "corporate_actions": "9281dd86bd76c9cf078daaba17ad90bf8be1c289d1583d180f2a343824ea335e",
-    "mts_eligible": "f8b20c01190661b651416933f0964442cd3250e8e747546d1fb672211c86d8c2"
+    "corporate_actions": "29e173f336da4fbf1524d54c8d1bea2414d9a73e22a5013d1ecc87f2522a58c1",
+    "mts_eligible": "ae39bfcaaf902ea64de88525a30cd23238394c7b8c98160ae54bc4a9934e2d47"
   }
 }

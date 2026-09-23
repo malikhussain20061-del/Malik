@@ -190,6 +190,11 @@ def load_market_panel(conn: sqlite3.Connection, div_wht: float = 0.15) -> Market
         "SELECT trade_date AS date, base_symbol AS symbol, open, close, volume, ldcp "
         "FROM daily_quotes WHERE is_final=1 AND open > 0", conn
     )
+    dup = quotes.duplicated(subset=["date", "symbol"], keep=False)
+    if dup.any():
+        bad = quotes[dup][["date", "symbol"]].head(10).to_dict(orient="records")
+        raise AssertionError(f"Duplicate (date, symbol) detected in quotes panel: {bad}")
+
     quotes["upper_limit"] = quotes["ldcp"] + np.maximum(0.10 * quotes["ldcp"], 1.00)
     quotes["lower_limit"] = np.maximum(quotes["ldcp"] - np.maximum(0.10 * quotes["ldcp"], 1.00), 0.01)
 
