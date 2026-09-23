@@ -125,12 +125,40 @@ class MarketPanel:
                    piv("upper_limit").reindex(columns=cols), piv("lower_limit").reindex(columns=cols))
 
 
+class CorporateActionMissingError(RuntimeError):
+    pass
+
+
+def verify_corporate_actions_completeness(conn: sqlite3.Connection, freeze_date: str = "2026-10-01") -> None:
+    """
+    Ensures every stock with an XD/XB/XR suffix on or after freeze_date has a matching
+    corporate action registered in corporate_actions.
+    Prevents false price drop biases on unadjusted ex-dividend/ex-bonus days during live forward test.
+    """
+    suff = pd.read_sql_query(
+        "SELECT trade_date, base_symbol, symbol FROM daily_quotes "
+        "WHERE trade_date >= ? AND (symbol LIKE '%XD' OR symbol LIKE '%XB' OR symbol LIKE '%XR')",
+        conn, params=(freeze_date,)
+    )
+    if suff.empty:
+        return
+    ca = pd.read_sql_query("SELECT base_symbol FROM corporate_actions WHERE ex_date >= ?", conn, params=(freeze_date,))
+    ca_syms = set(ca["base_symbol"].unique()) if not ca.empty else set()
+    unmapped = [s for s in suff["base_symbol"].unique() if s not in ca_syms]
+    if unmapped:
+        raise CorporateActionMissingError(
+            f"Missing corporate actions for ex-suffix tickers on/after {freeze_date}: {unmapped}. "
+            f"Ingest official cash dividend/bonus values before evaluating returns."
+        )
+
+
 def load_market_panel(conn: sqlite3.Connection, div_wht: float = 0.15) -> MarketPanel:
     """
     Constructs MarketPanel with Total Return adj_open using build_adj_factor.
     Eliminates mechanical negative dividend yield bias against high-dividend names (Q5 banks).
     Limits: 10% flat circuit bands (+/-10% or +/-Rs 1.00 min step).
     """
+    verify_corporate_actions_completeness(conn)
     quotes = pd.read_sql_query(
         "SELECT trade_date AS date, base_symbol AS symbol, open, close, volume, ldcp "
         "FROM daily_quotes WHERE is_final=1 AND open > 0", conn

@@ -410,23 +410,32 @@ def ingest_report(conn: sqlite3.Connection, pdf_path: str | Path, report_date: s
         raise ValueError(f"Duplicate symbols after sanitizing: {sorted(df.loc[dup, 'symbol'].unique())}")
 
     pct = df["open_pct"]
-
     df["implied_denominator"] = np.where(pct > 0, df["mts_volume"] / (pct / 100.0), np.nan)
-
     df["report_date"] = rd
-
     df["captured_at"] = ts.isoformat()
-
     df["report_sha256"] = sha
 
+    # Sanity: implied price vs close on report date (catches column shift between volume/amount)
+    quotes_close = pd.read_sql_query(
+        "SELECT base_symbol AS symbol, close FROM daily_quotes WHERE trade_date=? AND is_final=1",
+        conn, params=(rd,)
+    )
+    if not quotes_close.empty:
+        chk_m = df.merge(quotes_close, on="symbol", how="inner")
+        if not chk_m.empty:
+            implied_px = chk_m["mts_amount"] / chk_m["mts_volume"]
+            ratios = implied_px / chk_m["close"]
+            mismatches = chk_m[~ratios.between(0.5, 1.8)]
+            if not mismatches.empty:
+                raise ParseIntegrityError(
+                    f"Implied price vs close ratio mismatch for {mismatches['symbol'].tolist()}; "
+                    f"possible column shift between volume/amount fields!"
+                )
+
     cols = ["report_date", "symbol", "raw_symbol", "mts_volume", "mts_amount", "new_mts_volume",
-
             "new_mts_amount", "weighted_rate", "open_pct", "implied_denominator",
-
             "captured_at", "report_sha256"]
-
     conn.executemany(f"INSERT INTO mts_snapshots({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
-
                      df[cols].itertuples(index=False, name=None))
 
     _log_denominator_anomalies(conn, df, rd, denom_jump_tol)
