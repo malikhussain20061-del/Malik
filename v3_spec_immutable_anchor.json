@@ -1,6 +1,6 @@
 {
   "hypothesis_id": "MTS_CROWDING_XS_H10_V3",
-  "amendment_no": 8,
+  "amendment_no": 9,
   "status": "REGISTERED_PRE_DATA_FROZEN",
   "spec_sha256": "120b2a702931aec6a572a467c7b576ec37f18996b479b38bcbe3509fe23bd2e0",
   "spec": {
@@ -88,9 +88,9 @@
     "mts_engine.py": "3a37e90a17482dc91782152a85fa712391410da74655672ada7253c1e3fe3433",
     "jegadeesh_titman_portfolio.py": "0a5be711607da31315f0354b184cd170a197cbd098ce474d503aa46b498d43c8",
     "econometric_audit.py": "b2d9d5ba5afa0874ca242029a96292a650d5412aa6a36abcadec7a0bd2d33e35",
-    "run_mts_h1.py": "99519fcbee155bec761af34b5ad9660f16b6542fc663baadb4d52a47bf200006",
-    "psx_data_v2.py": "45894672039ee2c722122f9f07dfd2ae443d899915fb6fd3c558548b0f31c42b",
-    "daily_job.py": "2807742d5764ddd9522d6bd5c6d12bf885035bf46be08569935c4fe8759d02f8"
+    "run_mts_h1.py": "67e370b0bbf569f97f531233a5e9bc10fe7b8008aba86f1a165c6f1633caf653",
+    "psx_data_v2.py": "df8cfbf1aa83781f7ca43af7eae93a27f52a07f642013ffa16f374548bd50f06",
+    "daily_job.py": "e82d8da28ee66b57bf444503ca8e73cef8ac43ccb307541cca3377d1d0e13dfe"
   },
   "data_sha256": {
     "corporate_actions": "29e173f336da4fbf1524d54c8d1bea2414d9a73e22a5013d1ecc87f2522a58c1",

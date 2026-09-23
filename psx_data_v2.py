@@ -93,7 +93,7 @@ def session_status(con: sqlite3.Connection, rows: list[dict], today: str) -> str
     if same / n > 0.9:
         return "NO_SESSION"  # page still shows last session: weekend or holiday
     if adv / n < 0.8:
-        raise FeedError(f"ldcp does not match {last} close: missed a session or bad page")
+        return "GAP"  # missed session(s): ingest today, flag, alert — never self-lock
     return "NEW"
 
 
@@ -325,6 +325,9 @@ def upsert_quotes(con: sqlite3.Connection, rows: list[dict], is_final: bool) -> 
         log_run(con, "market_watch", "HOLIDAY", 0)
         print(f" [i] Market Watch matches previous session (>90% identical). Detected HOLIDAY/WEEKEND ({today}). 0 quotes inserted.")
         return 0
+    if status == "GAP":
+        log_run(con, "market_watch", "GAP_DETECTED", len(rows), error=f"LDCP diverged from last DB session: missed intermediate session")
+        print(f" [⚠️] GAP DETECTED on {today}: Intermediate missed session detected. Ingesting today's quotes. Backfill required from official PSX closing sheet.")
 
     # Load known base symbols for safe base_symbol stripping
     known = set(r[0] for r in con.execute("SELECT DISTINCT base_symbol FROM daily_quotes WHERE base_symbol IS NOT NULL").fetchall())

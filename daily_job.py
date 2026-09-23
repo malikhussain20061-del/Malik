@@ -100,9 +100,9 @@ def main() -> None:
     try:
         conn = sqlite3.connect("psx.db")
         row = conn.execute("SELECT status FROM hypothesis_ledger WHERE hypothesis_id=?", (SPEC["hypothesis_id"],)).fetchone()
-        if row and row[0] == "EVALUATED":
-            log.info("Hypothesis %s status is already EVALUATED. 240 sessions complete. Pipeline standing down.", SPEC["hypothesis_id"])
-            send_alert("EXPERIMENT_COMPLETED", f"Hypothesis {SPEC['hypothesis_id']} has reached final EVALUATED state. Standing down.")
+        if row and str(row[0]).startswith("EVALUATED"):
+            log.info("Hypothesis %s status is %s. 240 sessions complete. Pipeline standing down.", SPEC["hypothesis_id"], row[0])
+            send_alert("EXPERIMENT_COMPLETED", f"Hypothesis {SPEC['hypothesis_id']} has reached final state ({row[0]}). Standing down.")
             return
     except Exception as e:
         log.warning("Could not check hypothesis_ledger status: %s", e)

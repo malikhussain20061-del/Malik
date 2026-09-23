@@ -220,9 +220,10 @@ def main(mode: str, db: str = "psx.db") -> None:
         g = cohorts_df[cohorts_df["symbol"].map(sec_map_dict) == sector]
         if bucket != "U":
             g = g[g["bucket"] == bucket]
-        return {d: sorted(x["symbol"]) for d, x in g.groupby("entry_date")}
+        return {d: sorted(x["symbol"].unique()) for d, x in g.groupby("entry_date")}
 
     w = cohorts.loc[cohorts["bucket"] == "Q5", "symbol"].map(sec_map).dropna().value_counts(normalize=True)
+    n_nan = 0
     if not w.empty:
         S_components = []
         for s, ws in w.items():
@@ -233,7 +234,9 @@ def main(mode: str, db: str = "psx.db") -> None:
             ret_q5 = eng.run(q5s).returns
             ret_u = eng.run(us).returns
             S_components.append(float(ws) * (ret_q5 - ret_u))
-        S = sum(S_components).loc[R.index]
+        S_df = pd.concat(S_components, axis=1).reindex(R.index)
+        n_nan = int(S_df.isna().any(axis=1).sum())
+        S = S_df.fillna(0.0).sum(axis=1)
         sec_neutral_mean = float(S.mean())
     else:
         sec_neutral_mean = 0.0
@@ -264,10 +267,13 @@ def main(mode: str, db: str = "psx.db") -> None:
         "degradation_status": degradation_status,
         "missing_cohort_pct": missing_cohort_pct,
         "diagnostics": {
-            b: {
-                "mean_invested": float(res[b].invested.mean()),
-                "max_trapped": int(res[b].n_trapped.max())
-            } for b in BUCKETS
+            "sector_neutral_nan_days": n_nan,
+            **{
+                b: {
+                    "mean_invested": float(res[b].invested.mean()),
+                    "max_trapped": int(res[b].n_trapped.max())
+                } for b in BUCKETS
+            }
         }
     }
     record_result(conn, SPEC["hypothesis_id"], result)
