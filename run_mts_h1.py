@@ -44,7 +44,7 @@ SPEC = {
         "missing_report": "no cohort"
     },
     "universe": {
-        "eligible": "Official NCCPL MTS eligible securities list (periodically updated, source='NCCPL_OFFICIAL')",
+        "eligible": "PSX liquid proxy universe (139 symbols meeting session>=190, vol>=50k, close>=10, plus core MTS) until official NCCPL semi-annual circular is formally ingested (source in 'NCCPL_OFFICIAL', 'PSX_LIQUID_PROXY_139')",
         "min_volume": 50000,
         "min_price": 10.0,
         "min_names": 25,
@@ -58,6 +58,12 @@ SPEC = {
     "valuation": {
         "total_return_via_build_adj_factor": "splits, bonuses, and cash dividends (div_wht=0.15)",
         "corporate_actions_rule": "All corporate actions derived from Exchange LDCP gap detection (prev_close - ldcp) and ratio analysis. Pipeline halts if ex-suffix or LDCP gap occurs without matching event in corporate_actions."
+    },
+    "data_integrity_hashes": {
+        "corporate_actions_sha256": "9281dd86bd76c9cf078daaba17ad90bf8be1c289d1583d180f2a343824ea335e",
+        "corporate_actions_count": 383,
+        "mts_eligible_sha256": "f8b20c01190661b651416933f0964442cd3250e8e747546d1fb672211c86d8c2",
+        "mts_eligible_count": 139
     },
     "portfolio": {
         "K": 10,
@@ -93,7 +99,7 @@ SPEC = {
         "degradation_label": "DEGRADED if missing cohort sessions exceed 10%",
         "shadow_run_window": "2026-09-24 to 2026-09-30 (zero peeking at returns, feed health only)"
     },
-    "feed_frequency_decision_rule": "If by Sep 30, live daily MTS feed updates (at least 3 distinct daily reports) are not observed, Oct 1 forward run SHALL BE POSTPONED via pre-data Amendment to adapt to weekly sleeves or delay freeze date. Zero cost for postponement.",
+    "feed_frequency_decision_rule": "Strict Forward Freeze Gate: Between Sep 24 and Sep 30, all 5 consecutive sessions MUST receive a fresh NCCPL report before 09:15 PKT on T+2, with internal report_date advancing sequentially. If even 1 session is missed or report_date remains stagnant (e.g. at 2026-09-14), Oct 1 forward run SHALL BE AUTOMATICALLY POSTPONED. Zero peeking, zero cost for postponement.",
     "historical_total_return_status": "All 383 historical corporate actions backfilled via Exchange LDCP gap and ratio analysis. Full 238-day history is now pure Total Return.",
     "revision_policy": "Final pre-data revision V3. Post-freeze modifications restricted to documented bug-fix amendments logged with diff in hypothesis_amendments table.",
     "friction": FrictionModel().__dict__,

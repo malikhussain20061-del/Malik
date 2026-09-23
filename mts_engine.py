@@ -91,11 +91,9 @@ CREATE TABLE IF NOT EXISTS mts_eligible(
 );
 
 CREATE TABLE IF NOT EXISTS mts_anomalies(
-
-  report_date TEXT, symbol TEXT, kind TEXT, detail TEXT
-
+  report_date TEXT, symbol TEXT, kind TEXT, detail TEXT,
+  PRIMARY KEY(report_date, symbol, kind)
 );
-
 """
 
 
@@ -498,22 +496,26 @@ def load_signal_panel(conn: sqlite3.Connection, signal_col: str = "open_pct") ->
 
         f"SELECT report_date, symbol, {signal_col} AS L, captured_at FROM mts_snapshots", conn)
 
-    elig = pd.read_sql_query("SELECT effective_date, symbol, source FROM mts_eligible WHERE source = 'NCCPL_OFFICIAL'", conn)
-
+    elig = pd.read_sql_query(
+        "SELECT effective_date, symbol, source FROM mts_eligible "
+        "WHERE source IN ('NCCPL_OFFICIAL', 'PSX_LIQUID_PROXY_139')", conn
+    )
     if elig.empty:
-        raise RuntimeError("No official NCCPL eligible securities list (source='NCCPL_OFFICIAL') in mts_eligible table. Ingest official circular to eliminate circular selection bias.")
+        raise RuntimeError("No eligible securities list found in mts_eligible table. Ingest official circular or proxy list.")
 
     out = []
     for rd, g in snaps.groupby("report_date"):
         eff = elig.loc[elig["effective_date"] <= rd, "effective_date"]
         if eff.empty:
-            raise RuntimeError(f"{rd}: no eligible securities list in force on or prior to this report date. Ingest official NCCPL circular.")
+            raise RuntimeError(f"{rd}: no eligible securities list in force on or prior to this report date.")
 
         members = set(elig.loc[elig["effective_date"] == eff.max(), "symbol"])
-        missing = sorted(members - set(g["symbol"]))
         extra = set(g["symbol"]) - members
         if extra:
-            log.info("%s: %d financed symbols not on eligible list: %s", rd, len(extra), sorted(extra))
+            log.info("%s: %d financed symbols not on eligible list dropped: %s", rd, len(extra), sorted(extra))
+            g = g[g["symbol"].isin(members)].copy()
+
+        missing = sorted(members - set(g["symbol"]))
 
         # Vanished-symbol rule: if stock had L > 0 on previous report date but missing today,
         # do NOT assign L = 0 (which dumps it into Q0). Exclude it and log to mts_anomalies.
@@ -522,7 +524,10 @@ def load_signal_panel(conn: sqlite3.Connection, signal_col: str = "open_pct") ->
             prev_pos = set(snaps.loc[(snaps["report_date"] == prev_rd) & (snaps["L"] > 0), "symbol"])
             vanished = set(missing) & prev_pos
             for s in sorted(vanished):
-                conn.execute("INSERT INTO mts_anomalies VALUES (?,?,?,?)", (rd, s, "VANISHED", "excluded from cohort"))
+                conn.execute(
+                    "INSERT OR IGNORE INTO mts_anomalies(report_date, symbol, kind, detail) VALUES (?,?,?,?)",
+                    (rd, s, "VANISHED", "excluded from cohort")
+                )
             missing = sorted(set(missing) - vanished)
 
         add = pd.DataFrame({"report_date": rd, "symbol": missing, "L": 0.0,

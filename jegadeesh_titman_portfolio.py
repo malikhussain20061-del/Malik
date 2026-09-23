@@ -61,7 +61,7 @@ class FrictionModel:
 def build_adj_factor(quotes: pd.DataFrame, events: pd.DataFrame,
                      div_wht: float = 0.15) -> pd.DataFrame:
     """quotes: [date, symbol, close]; events: [symbol, ex_date, kind, value]
-    kind: 'split' (value=n for n:1), 'bonus' (value=0.20 for 20%), 'cash' (Rs/share).
+    kind: 'split' (value=ratio < 1 or n for n:1), 'bonus' (ratio < 1 or pct), 'cash' (Rs/share).
     adj_factor(t) = product of ratios of all events with ex_date > t.
     div_wht: dividend withholding rate (default 15%)."""
     q = quotes.sort_values(["symbol", "date"]).copy()
@@ -75,18 +75,25 @@ def build_adj_factor(quotes: pd.DataFrame, events: pd.DataFrame,
         prev = q[m & (q["date"] < ex_date_str)]
         if prev.empty:
             continue
-        if ev.kind == "split":
-            ratio = 1.0 / ev.value
-        elif ev.kind == "bonus":
-            ratio = 1.0 / (1.0 + ev.value)
-        elif ev.kind == "cash":
-            dy = ev.value / prev["close"].iloc[-1]
+        kind = str(ev.kind).strip().lower()
+        if kind == "split":
+            val = float(ev.value)
+            # If value < 1.0 (e.g. 0.10 for 10:1 split), ratio is directly value
+            # If value >= 1.0 (e.g. 10.0 for 10:1 split), ratio is 1.0 / value
+            ratio = val if (0 < val < 1.0) else (1.0 / val if val >= 1.0 else 1.0)
+        elif kind == "bonus":
+            val = float(ev.value)
+            bonus_pct = val if val < 1.0 else val / 100.0
+            ratio = 1.0 / (1.0 + bonus_pct)
+        elif kind == "cash":
+            cash_val = float(ev.value)
+            dy = cash_val / prev["close"].iloc[-1]
             if not (0 < dy < 0.40):
                 raise ValueError(
                     f"{ev.symbol} {ex_date_str}: implied dividend yield {dy:.1%} out of range (0, 40%); "
                     f"unit error? (Ensure face-value % is converted to Rs/share: value = pct/100 * face_value)"
                 )
-            ratio = 1.0 - ev.value * (1.0 - div_wht) / prev["close"].iloc[-1]
+            ratio = 1.0 - cash_val * (1.0 - div_wht) / prev["close"].iloc[-1]
         else:
             raise ValueError(f"unhandled kind {ev.kind} for {ev.symbol}; handle rights explicitly")
         q.loc[m & (q["date"] < ex_date_str), "adj_factor"] *= ratio
@@ -129,26 +136,32 @@ class CorporateActionMissingError(RuntimeError):
     pass
 
 
-def verify_corporate_actions_completeness(conn: sqlite3.Connection, freeze_date: str = "2026-10-01") -> None:
+def verify_corporate_actions_completeness(conn: sqlite3.Connection, freeze_date: str = "2026-10-01", tick: float = 0.011) -> None:
     """
-    Ensures every stock with an XD/XB/XR suffix on or after freeze_date has a matching
-    corporate action registered in corporate_actions.
-    Prevents false price drop biases on unadjusted ex-dividend/ex-bonus days during live forward test.
+    Verifies that every price gap exceeding 1 tick (0.011) on or after freeze_date
+    has an accounted corporate action in corporate_actions.
+    Also flags any rights issues ('XR' tickers) which halt trading under protocol.
     """
-    suff = pd.read_sql_query(
-        "SELECT trade_date, base_symbol, symbol FROM daily_quotes "
-        "WHERE trade_date >= ? AND (symbol LIKE '%XD' OR symbol LIKE '%XB' OR symbol LIKE '%XR')",
-        conn, params=(freeze_date,)
-    )
-    if suff.empty:
+    ca = pd.read_sql_query("SELECT base_symbol, ex_date FROM corporate_actions", conn)
+    have = set(zip(ca["base_symbol"], ca["ex_date"]))
+    q = pd.read_sql_query("""
+        WITH q AS (
+            SELECT base_symbol, symbol, trade_date, ldcp,
+                   LAG(close) OVER (PARTITION BY base_symbol ORDER BY trade_date) AS prev_close
+            FROM daily_quotes
+            WHERE is_final = 1 AND base_symbol NOT LIKE '%-%' AND symbol NOT LIKE '%R' AND symbol NOT LIKE '%R1'
+        )
+        SELECT * FROM q WHERE trade_date >= ? AND prev_close IS NOT NULL
+    """, conn, params=(freeze_date,))
+    if q.empty:
         return
-    ca = pd.read_sql_query("SELECT base_symbol FROM corporate_actions WHERE ex_date >= ?", conn, params=(freeze_date,))
-    ca_syms = set(ca["base_symbol"].unique()) if not ca.empty else set()
-    unmapped = [s for s in suff["base_symbol"].unique() if s not in ca_syms]
-    if unmapped:
+    gap = q["prev_close"] - q["ldcp"]
+    bad = q[(gap.abs() > tick) & ~q.apply(lambda r: (r.base_symbol, r.trade_date) in have, axis=1)]
+    rights = q[q["symbol"].str.contains("XR", na=False)]
+    if not bad.empty or not rights.empty:
         raise CorporateActionMissingError(
-            f"Missing corporate actions for ex-suffix tickers on/after {freeze_date}: {unmapped}. "
-            f"Ingest official cash dividend/bonus values before evaluating returns."
+            f"unaccounted gaps: {bad[['base_symbol','trade_date']].values.tolist()} "
+            f"rights: {rights['base_symbol'].unique().tolist()}"
         )
 
 
@@ -171,14 +184,13 @@ def load_market_panel(conn: sqlite3.Connection, div_wht: float = 0.15) -> Market
     )
     events_list = []
     for _, r in events_raw.iterrows():
-        act = str(r["action_type"]).upper()
-        if act == "SPLIT":
-            val = 1.0 / r["ratio"] if (r["ratio"] and r["ratio"] > 0) else 10.0
-            events_list.append({"symbol": r["symbol"], "ex_date": r["ex_date"], "kind": "split", "value": val})
-        elif act == "BONUS":
-            events_list.append({"symbol": r["symbol"], "ex_date": r["ex_date"], "kind": "bonus", "value": r["ratio"]})
-        elif act == "CASH":
-            events_list.append({"symbol": r["symbol"], "ex_date": r["ex_date"], "kind": "cash", "value": r["amount"]})
+        act = str(r["action_type"]).strip().lower()
+        if act == "split":
+            events_list.append({"symbol": r["symbol"], "ex_date": r["ex_date"], "kind": "split", "value": float(r["ratio"])})
+        elif act == "bonus":
+            events_list.append({"symbol": r["symbol"], "ex_date": r["ex_date"], "kind": "bonus", "value": float(r["ratio"])})
+        elif act == "cash":
+            events_list.append({"symbol": r["symbol"], "ex_date": r["ex_date"], "kind": "cash", "value": float(r["amount"])})
     events = pd.DataFrame(events_list) if events_list else pd.DataFrame(columns=["symbol", "ex_date", "kind", "value"])
 
     adj = build_adj_factor(quotes[["date", "symbol", "close"]], events, div_wht=div_wht)

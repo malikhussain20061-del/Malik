@@ -1,0 +1,21 @@
+# Database and WAL files
+*.db
+*.db-wal
+*.db-shm
+
+# Data and archives
+raw_archive/
+backups/
+*.apk
+*.zip
+
+# Logs and scratch
+*.log
+daily_job_status.txt
+CRITICAL_JOB_FAILURE.log
+scratch/
+__pycache__/
+.vscode/
+
+# Environment / Secrets
+.env
