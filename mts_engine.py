@@ -84,6 +84,8 @@ CREATE TABLE IF NOT EXISTS mts_eligible(
 
   symbol TEXT NOT NULL,
 
+  source TEXT NOT NULL DEFAULT 'NCCPL_OFFICIAL',
+
   PRIMARY KEY(effective_date, symbol)
 
 );
@@ -496,10 +498,10 @@ def load_signal_panel(conn: sqlite3.Connection, signal_col: str = "open_pct") ->
 
         f"SELECT report_date, symbol, {signal_col} AS L, captured_at FROM mts_snapshots", conn)
 
-    elig = pd.read_sql_query("SELECT effective_date, symbol FROM mts_eligible", conn)
+    elig = pd.read_sql_query("SELECT effective_date, symbol, source FROM mts_eligible WHERE source = 'NCCPL_OFFICIAL'", conn)
 
     if elig.empty:
-        raise RuntimeError("mts_eligible table is empty. Live pipeline requires official NCCPL eligible securities list to avoid circular selection bias.")
+        raise RuntimeError("No official NCCPL eligible securities list (source='NCCPL_OFFICIAL') in mts_eligible table. Ingest official circular to eliminate circular selection bias.")
 
     out = []
     for rd, g in snaps.groupby("report_date"):

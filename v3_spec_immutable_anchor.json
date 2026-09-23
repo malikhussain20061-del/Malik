@@ -2,16 +2,16 @@
   "anchor_type": "EXTERNAL_PRE_DATA_SPEC_ANCHOR",
   "hypothesis_id": "MTS_CROWDING_XS_H10_V3",
   "test_number": 2,
-  "amendment_no": 4,
+  "amendment_no": 5,
   "freeze_date": "2026-10-01",
-  "git_commit_sha": "1c2cc0017f89073fccf77bfdf44ba1fe0586f5b9",
-  "spec_sha256": "58bb59b39f4d972bfdf0a04c97671fbe6705cd79c644ded70786ef893b53d53e",
-  "diff_sha256": "c19759b105eae4d2d1b2217a32d6e70766d524603a807b9b3c46e8c6110dcf88",
+  "registered_at_utc": "2026-09-23T06:16:00Z",
+  "spec_sha256": "7fc0d8d82ec8de7f058fbf8d554535e93609a659867e3aae170bd1847a0fff4a",
+  "diff_sha256": "1bd99430956735c00b0e3ff9c56e3e95d5564eaf9bbb04d9bdfb922fbe4ffdd1",
   "code_sha256": {
-    "mts_engine.py": "149c691b816a26e714536304d25e11cac92fcdc28c68c5ac23eb1d4dee812438",
+    "mts_engine.py": "4fe0a3e892f638b559bcbed24a9b7872888bc2cc3d84fdb77469d6b0d4770253",
     "jegadeesh_titman_portfolio.py": "fe057a5f757b915b2cffe4d3ecc70ad7ec8a0f12666f3bc07c8270e911cbe3cb",
     "econometric_audit.py": "b2d9d5ba5afa0874ca242029a96292a650d5412aa6a36abcadec7a0bd2d33e35",
-    "run_mts_h1.py": "1ac5c8dce1a193b4dc41719414a423caa5fc8688afca212539016bdc053350cc",
+    "run_mts_h1.py": "aafaad2aa8c3bc5547b9513e98a5435ce602b1be545f734471644a9353202eab",
     "psx_data_v2.py": "269c4d149cf6fb88555ab7b48598d81ce360987cdc42275614a46450cdeafea9",
     "daily_job.py": "31f3f6a3fab753baaceec4e5477045f026cf08ce47bd39e1049f90ecc054f517"
   },
@@ -34,6 +34,10 @@
     "rule": "Crowding effect confirmed ONLY IF primary is statistically significant AND sector-neutral spread < 0. Otherwise classified as Sector Exposure.",
     "null_conclusion": "Failure to reject implies no crowding effect larger than 1.40% per 10 sessions detected."
   },
+  "feed_frequency_decision_rule": {
+    "condition": "If by Sep 30, live daily MTS feed updates (at least 3 distinct daily reports) are not observed, forward freeze date (2026-10-01) SHALL BE POSTPONED via pre-data Amendment to adapt to weekly sleeves or delay freeze date.",
+    "action": "Postpone freeze date or switch to weekly JT sleeves. Zero penalty for pre-data postponement."
+  },
   "shadow_run_protocol": {
     "window": "2026-09-24 to 2026-09-30",
     "mode": "python run_mts_h1.py shadow",
@@ -41,6 +45,6 @@
   },
   "external_anchor_instructions_for_user": [
     "1. Push this Git repository to a remote server (e.g. private GitHub/GitLab): git remote add origin <url> && git push -u origin HEAD",
-    "2. Email this JSON file (v3_spec_immutable_anchor.json) to yourself or a colleague before 2026-10-01."
+    "2. Email this JSON file (v3_spec_immutable_anchor.json) along with your git commit hash to yourself or a colleague before 2026-10-01."
   ]
 }

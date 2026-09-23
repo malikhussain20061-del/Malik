@@ -57,7 +57,7 @@ SPEC = {
     },
     "valuation": {
         "total_return_via_build_adj_factor": "splits, bonuses, and cash dividends (div_wht=0.15)",
-        "corporate_actions_rule": "Every ex-suffix ticker (XD/XB/XR) must have matching event in corporate_actions on or before ex_date, or pipeline raises CorporateActionMissingError"
+        "corporate_actions_rule": "All corporate actions derived from Exchange LDCP gap detection (prev_close - ldcp) and ratio analysis. Pipeline halts if ex-suffix or LDCP gap occurs without matching event in corporate_actions."
     },
     "portfolio": {
         "K": 10,
@@ -93,7 +93,8 @@ SPEC = {
         "degradation_label": "DEGRADED if missing cohort sessions exceed 10%",
         "shadow_run_window": "2026-09-24 to 2026-09-30 (zero peeking at returns, feed health only)"
     },
-    "historical_mde_note": "Placebo and MDE were computed on historical daily quotes without ex-dividend adjustments since history lacked XD suffixes. Live forward run strictly captures XD/XB/XR tickers and enforces Total Return adjustments.",
+    "feed_frequency_decision_rule": "If by Sep 30, live daily MTS feed updates (at least 3 distinct daily reports) are not observed, Oct 1 forward run SHALL BE POSTPONED via pre-data Amendment to adapt to weekly sleeves or delay freeze date. Zero cost for postponement.",
+    "historical_total_return_status": "All 383 historical corporate actions backfilled via Exchange LDCP gap and ratio analysis. Full 238-day history is now pure Total Return.",
     "revision_policy": "Final pre-data revision V3. Post-freeze modifications restricted to documented bug-fix amendments logged with diff in hypothesis_amendments table.",
     "friction": FrictionModel().__dict__,
 }
