@@ -421,16 +421,22 @@ def ingest_report(conn: sqlite3.Connection, pdf_path: str | Path, report_date: s
         conn, params=(rd,)
     )
     if not quotes_close.empty:
-        chk_m = df.merge(quotes_close, on="symbol", how="inner")
-        if not chk_m.empty:
-            implied_px = chk_m["mts_amount"] / chk_m["mts_volume"]
-            ratios = implied_px / chk_m["close"]
-            mismatches = chk_m[~ratios.between(0.5, 1.8)]
-            if not mismatches.empty:
-                raise ParseIntegrityError(
-                    f"Implied price vs close ratio mismatch for {mismatches['symbol'].tolist()}; "
-                    f"possible column shift between volume/amount fields!"
-                )
+        chk_m = df.merge(quotes_close, on="symbol", how="left")
+        v = chk_m["mts_volume"] > 0
+        px_valid = chk_m["close"].notna()
+        chk = v & px_valid
+        for s in chk_m.loc[~chk, "symbol"]:
+            conn.execute("INSERT INTO mts_anomalies VALUES (?,?,?,?)", (rd, s, "PRICE_CHECK_SKIPPED", "vol=0 or missing close"))
+        if chk.sum() < 0.90 * len(df):
+            raise ParseIntegrityError(f"Too many rows unverifiable in price check: {chk.sum()}/{len(df)}")
+        implied_px = chk_m.loc[chk, "mts_amount"] / chk_m.loc[chk, "mts_volume"]
+        ratios = implied_px / chk_m.loc[chk, "close"]
+        mismatches = chk_m.loc[chk][~ratios.between(0.5, 1.8)]
+        if not mismatches.empty:
+            raise ParseIntegrityError(
+                f"Implied price vs close ratio mismatch for {mismatches['symbol'].tolist()}; "
+                f"possible column shift between volume/amount fields!"
+            )
 
     cols = ["report_date", "symbol", "raw_symbol", "mts_volume", "mts_amount", "new_mts_volume",
             "new_mts_amount", "weighted_rate", "open_pct", "implied_denominator",

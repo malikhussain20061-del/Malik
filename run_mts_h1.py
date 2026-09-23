@@ -32,7 +32,7 @@ SPEC = {
     "alpha": 0.025,
     "freeze_date": "2026-10-01",            # first report_date counted (after pre-registration window)
     "evaluation_sessions": 240,             # 240 sessions gives MDE ~1.23% per 10-day horizon (85% power)
-    "power_statement": "Under sector-matched placebo matching Q5's exact composition (5 Banks, 2 E&P, 2 Cement, 1 OMC, 1 Power, 1 Fertilizer; sigma ~0.626%), T=240 sessions yields 10-day MDE of 1.226% (analytic, nu=15) and 1.400% (20-draw simulated) at 85% power. Power at 1.0% 10-day spread is ~65%.",
+    "power_statement": "Under sector-matched placebo matching Q5's exact composition (5 Banks, 2 E&P, 2 Cement, 1 OMC, 1 Power, 1 Fertilizer; sigma ~0.626%), T=240 sessions yields 10-day Simulated MDE of 1.400% (20-draw median) at 85% power (Analytic MDE 1.226%). Power at 1.0% 10-day spread is ~52.4% under empirical fat tails. If null cannot be rejected, conclusion is: 'No crowding effect larger than 1.40% per 10 sessions detected'.",
     "signal": {
         "column": "open_pct",
         "rank": "cross-sectional over financed names (L>0), average ties",
@@ -42,7 +42,7 @@ SPEC = {
         "missing_report": "no cohort"
     },
     "universe": {
-        "eligible": "Official NCCPL MTS eligible securities list (periodically updated)",
+        "eligible": "Official NCCPL MTS eligible securities list (periodically updated, source='NCCPL_OFFICIAL')",
         "min_volume": 50000,
         "min_price": 10.0,
         "min_names": 25,
@@ -54,7 +54,8 @@ SPEC = {
         "rule": "cohort dropped if captured_at >= entry open"
     },
     "valuation": {
-        "total_return_via_build_adj_factor": "splits, bonuses, and cash dividends (div_wht=0.15)"
+        "total_return_via_build_adj_factor": "splits, bonuses, and cash dividends (div_wht=0.15)",
+        "corporate_actions_rule": "Every ex-suffix ticker (XD/XB/XR) must have matching event in corporate_actions on or before ex_date, or pipeline raises CorporateActionMissingError"
     },
     "portfolio": {
         "K": 10,
@@ -75,13 +76,20 @@ SPEC = {
         "PT MR test decreasing across financed buckets Q1..Q5, B=10000, block=10",
         "Sector-Neutral Crowding Spread: within-sector mean(Q5 - sector_universe)"
     ],
+    "sector_neutral_spread_formula": {
+        "definition": "S_t = sum_{s in S} (N_{Q5, s} / |Q5|) * (R_{Q5, s, t} - R_{U, s, t})",
+        "eligible_universe_in_sector": "R_{U, s, t} includes all eligible stocks in sector s (including Q5 members)",
+        "monopoly_sector_rule": "If sector s contains only Q5 stocks in eligible universe, spread for sector s is set to 0",
+        "execution": "Computed via identical JT sleeve engine with sector-filtered schedules"
+    },
     "interpretation_gate": {
-        "rule": "Crowding effect confirmed ONLY IF primary test is statistically significant AND sector-neutral spread < 0. Otherwise classified as Sector Exposure.",
+        "rule": "Crowding effect confirmed ONLY IF primary test is statistically significant (p < 0.025) AND sector-neutral spread mean < 0. If primary is significant but sector-neutral spread >= 0, result is classified as Sector Exposure (e.g. macro banking drag).",
         "null_framing": "Failure to reject implies no crowding effect larger than 1.40% per 10 sessions detected."
     },
     "operational_rules": {
         "max_missing_cohort_pct": 0.10,
-        "degradation_label": "DEGRADED if missing cohort sessions exceed 10%"
+        "degradation_label": "DEGRADED if missing cohort sessions exceed 10%",
+        "shadow_run_window": "2026-09-24 to 2026-09-30 (zero peeking at returns, feed health only)"
     },
     "revision_policy": "Final pre-data revision V3. Post-freeze modifications restricted to documented bug-fix amendments logged with diff in hypothesis_amendments table.",
     "friction": FrictionModel().__dict__,
