@@ -96,6 +96,20 @@ def main() -> None:
     except Exception as e:
         log.warning("Could not check feed freshness: %s", e)
 
+    # Check if GAP was detected in today's ingest run
+    try:
+        conn = sqlite3.connect("psx.db")
+        gap_count = conn.execute(
+            "SELECT COUNT(*) FROM ingest_runs WHERE status='GAP_DETECTED' AND substr(started_ts, 1, 10)=?",
+            (today.isoformat(),)
+        ).fetchone()[0]
+        if gap_count:
+            gap_msg = f"GAP_DETECTED on {today.isoformat()}: Missed trading session detected in DPS feed. Intermediate day must be backfilled from official PSX closing sheet before next T+2 entry."
+            log.warning(gap_msg)
+            send_alert("GAP_DETECTED", gap_msg)
+    except Exception as e:
+        log.warning("Could not check GAP_DETECTED in ingest_runs: %s", e)
+
     # Check if hypothesis has already completed and evaluated
     try:
         conn = sqlite3.connect("psx.db")

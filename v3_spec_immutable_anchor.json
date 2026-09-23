@@ -1,8 +1,8 @@
 {
   "hypothesis_id": "MTS_CROWDING_XS_H10_V3",
-  "amendment_no": 9,
+  "amendment_no": 10,
   "status": "REGISTERED_PRE_DATA_FROZEN",
-  "spec_sha256": "120b2a702931aec6a572a467c7b576ec37f18996b479b38bcbe3509fe23bd2e0",
+  "spec_sha256": "870f68825b1bd6780acc104e91e9ad8a8c5abd5d4eaa796376de0f0db2f8637b",
   "spec": {
     "hypothesis_id": "MTS_CROWDING_XS_H10_V3",
     "test_number": 2,
@@ -35,9 +35,9 @@
       "corporate_actions_rule": "All corporate actions derived from Exchange LDCP gap detection (prev_close - ldcp) and ratio analysis. Pipeline halts if ex-suffix or LDCP gap occurs without matching event in corporate_actions."
     },
     "data_integrity_hashes": {
-      "corporate_actions_sha256": "9281dd86bd76c9cf078daaba17ad90bf8be1c289d1583d180f2a343824ea335e",
-      "corporate_actions_count": 383,
-      "mts_eligible_sha256": "f8b20c01190661b651416933f0964442cd3250e8e747546d1fb672211c86d8c2",
+      "corporate_actions_sha256": "f9f5d688627131ca1132643579aea2bb2b9e25ccf75d311cb86d71b41b0c4c9f",
+      "corporate_actions_count": 393,
+      "mts_eligible_sha256": "d758bde4b123a4e685c9fcb597bd2d9c0dc25225d120035fb3d60d10c5dfa79d",
       "mts_eligible_count": 139
     },
     "portfolio": {
@@ -88,12 +88,12 @@
     "mts_engine.py": "3a37e90a17482dc91782152a85fa712391410da74655672ada7253c1e3fe3433",
     "jegadeesh_titman_portfolio.py": "0a5be711607da31315f0354b184cd170a197cbd098ce474d503aa46b498d43c8",
     "econometric_audit.py": "b2d9d5ba5afa0874ca242029a96292a650d5412aa6a36abcadec7a0bd2d33e35",
-    "run_mts_h1.py": "67e370b0bbf569f97f531233a5e9bc10fe7b8008aba86f1a165c6f1633caf653",
+    "run_mts_h1.py": "fe81a704077b393a7b8790bea4408c2d730b198d3a84d64162e447595e2ee3a8",
     "psx_data_v2.py": "df8cfbf1aa83781f7ca43af7eae93a27f52a07f642013ffa16f374548bd50f06",
-    "daily_job.py": "e82d8da28ee66b57bf444503ca8e73cef8ac43ccb307541cca3377d1d0e13dfe"
+    "daily_job.py": "313f5420c8fb92b3da0024108dae59fc4778daf3bd8191254dd597e681bdf81f"
   },
   "data_sha256": {
-    "corporate_actions": "29e173f336da4fbf1524d54c8d1bea2414d9a73e22a5013d1ecc87f2522a58c1",
-    "mts_eligible": "ae39bfcaaf902ea64de88525a30cd23238394c7b8c98160ae54bc4a9934e2d47"
+    "corporate_actions": "f9f5d688627131ca1132643579aea2bb2b9e25ccf75d311cb86d71b41b0c4c9f",
+    "mts_eligible": "d758bde4b123a4e685c9fcb597bd2d9c0dc25225d120035fb3d60d10c5dfa79d"
   }
 }

@@ -1,6 +1,8 @@
 """
 python run_mts_h1.py mde | register | evaluate
 """
+import hashlib
+import json
 import logging
 import sqlite3
 import sys
@@ -61,9 +63,9 @@ SPEC = {
         "corporate_actions_rule": "All corporate actions derived from Exchange LDCP gap detection (prev_close - ldcp) and ratio analysis. Pipeline halts if ex-suffix or LDCP gap occurs without matching event in corporate_actions."
     },
     "data_integrity_hashes": {
-        "corporate_actions_sha256": "9281dd86bd76c9cf078daaba17ad90bf8be1c289d1583d180f2a343824ea335e",
-        "corporate_actions_count": 383,
-        "mts_eligible_sha256": "f8b20c01190661b651416933f0964442cd3250e8e747546d1fb672211c86d8c2",
+        "corporate_actions_sha256": "f9f5d688627131ca1132643579aea2bb2b9e25ccf75d311cb86d71b41b0c4c9f",
+        "corporate_actions_count": 393,
+        "mts_eligible_sha256": "d758bde4b123a4e685c9fcb597bd2d9c0dc25225d120035fb3d60d10c5dfa79d",
         "mts_eligible_count": 139
     },
     "portfolio": {
@@ -107,6 +109,12 @@ SPEC = {
 }
 
 BUCKETS = ["Q0", "Q1", "Q2", "Q3", "Q4", "Q5", "U"]
+
+
+def table_sha256(conn: sqlite3.Connection, table: str) -> tuple[str, int]:
+    rows = conn.execute(f"SELECT * FROM {table} ORDER BY 1,2,3").fetchall()
+    h = hashlib.sha256(json.dumps(rows, default=str).encode("utf-8")).hexdigest()
+    return h, len(rows)
 
 
 def main(mode: str, db: str = "psx.db") -> None:
@@ -170,6 +178,20 @@ def main(mode: str, db: str = "psx.db") -> None:
     chk = verify_registration(conn, SPEC["hypothesis_id"], SPEC, CODE_FILES)
     if not chk["all_ok"]:
         raise SystemExit(f"Registration mismatch: {chk}")
+
+    # Runtime data integrity verification: guard against post-freeze data tampering
+    for tbl, key_hash, key_cnt in [
+        ("corporate_actions", "corporate_actions_sha256", "corporate_actions_count"),
+        ("mts_eligible", "mts_eligible_sha256", "mts_eligible_count")
+    ]:
+        cur_hash, cur_cnt = table_sha256(conn, tbl)
+        exp_hash = SPEC["data_integrity_hashes"][key_hash]
+        exp_cnt = SPEC["data_integrity_hashes"][key_cnt]
+        if cur_hash != exp_hash or cur_cnt != exp_cnt:
+            raise SystemExit(
+                f"Data integrity violation: {tbl} tampered or altered! "
+                f"Count={cur_cnt} (exp {exp_cnt}), SHA={cur_hash} (exp {exp_hash})"
+            )
 
     cfg = SignalConfig(
         min_volume=SPEC["universe"]["min_volume"],
