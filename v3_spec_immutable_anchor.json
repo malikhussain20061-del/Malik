@@ -2,17 +2,18 @@
   "anchor_type": "EXTERNAL_PRE_DATA_SPEC_ANCHOR",
   "hypothesis_id": "MTS_CROWDING_XS_H10_V3",
   "test_number": 2,
-  "amendment_no": 3,
+  "amendment_no": 4,
   "freeze_date": "2026-10-01",
-  "registered_at_utc": "2026-09-23T05:10:02Z",
-  "git_commit_sha": "5d1168c2678ecac6cad1d7640adb8964155b0747",
-  "spec_sha256": "dce2aa47c0e5415046142375ac90b6ad256e09a3eb01ddaab8841e1759495ebc",
-  "diff_sha256": "9856e9769efbe018fba2814454a2ad4cc909b35e583da9bea0c5fd0e5925e762",
+  "git_commit_sha": "1c2cc0017f89073fccf77bfdf44ba1fe0586f5b9",
+  "spec_sha256": "58bb59b39f4d972bfdf0a04c97671fbe6705cd79c644ded70786ef893b53d53e",
+  "diff_sha256": "c19759b105eae4d2d1b2217a32d6e70766d524603a807b9b3c46e8c6110dcf88",
   "code_sha256": {
     "mts_engine.py": "149c691b816a26e714536304d25e11cac92fcdc28c68c5ac23eb1d4dee812438",
     "jegadeesh_titman_portfolio.py": "fe057a5f757b915b2cffe4d3ecc70ad7ec8a0f12666f3bc07c8270e911cbe3cb",
     "econometric_audit.py": "b2d9d5ba5afa0874ca242029a96292a650d5412aa6a36abcadec7a0bd2d33e35",
-    "run_mts_h1.py": "b560d867cbb5681b7b1a0450b0ffc4f1716c77a4f60c5648c5b2db6481d8e5d9"
+    "run_mts_h1.py": "1ac5c8dce1a193b4dc41719414a423caa5fc8688afca212539016bdc053350cc",
+    "psx_data_v2.py": "269c4d149cf6fb88555ab7b48598d81ce360987cdc42275614a46450cdeafea9",
+    "daily_job.py": "31f3f6a3fab753baaceec4e5477045f026cf08ce47bd39e1049f90ecc054f517"
   },
   "headline_mde": {
     "simulated_10d_mde": "1.400%",
@@ -39,7 +40,7 @@
     "purpose": "Feed health verification, capture timing check, anomaly logging, zero return peeking."
   },
   "external_anchor_instructions_for_user": [
-    "1. Push this Git repository to a remote server (e.g. private GitHub/GitLab): git remote add origin <url> && git push -u origin master",
+    "1. Push this Git repository to a remote server (e.g. private GitHub/GitLab): git remote add origin <url> && git push -u origin HEAD",
     "2. Email this JSON file (v3_spec_immutable_anchor.json) to yourself or a colleague before 2026-10-01."
   ]
 }

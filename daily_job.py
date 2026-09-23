@@ -22,15 +22,38 @@ log = logging.getLogger("daily_job")
 
 FREEZE_DATE = dt.date(2026, 10, 1)
 
+def send_alert(status: str, detail: str) -> None:
+    # 1. Write local status file
+    status_file = Path("daily_job_status.txt")
+    status_file.write_text(
+        f"STATUS: {status}\nTIMESTAMP_PKT: {dt.datetime.now().isoformat()}\nDETAIL:\n{detail}\n",
+        encoding="utf-8"
+    )
+    # 2. Telegram / Webhook notification if environment variables configured
+    import os, urllib.request, json
+    tg_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    tg_chat = os.environ.get("TELEGRAM_CHAT_ID")
+    if tg_token and tg_chat:
+        try:
+            tg_url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
+            payload = json.dumps({"chat_id": tg_chat, "text": f"[PSX PIPELINE] {status}\n{detail[:3500]}"}).encode("utf-8")
+            req = urllib.request.Request(tg_url, data=payload, headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=10)
+            log.info("Telegram notification successfully dispatched.")
+        except Exception as e:
+            log.warning("Telegram alert failed: %s", e)
+
 def run_step(cmd: list[str], step_name: str) -> None:
     log.info("Starting step: %s (%s)", step_name, " ".join(cmd))
     res = subprocess.run([sys.executable] + cmd, capture_output=True, text=True, encoding="utf-8")
     if res.returncode != 0:
         log.error("Step %s FAILED (exit code %d):\nSTDOUT:\n%s\nSTDERR:\n%s",
                   step_name, res.returncode, res.stdout, res.stderr)
-        # Write emergency alert file
+        # Write emergency alert file and trigger notification
         alert_file = Path("CRITICAL_JOB_FAILURE.log")
-        alert_file.write_text(f"FAILED {step_name} at {dt.datetime.now().isoformat()}\n{res.stderr}\n{res.stdout}", encoding="utf-8")
+        err_msg = f"FAILED {step_name} at {dt.datetime.now().isoformat()}\nSTDERR:\n{res.stderr}\nSTDOUT:\n{res.stdout}"
+        alert_file.write_text(err_msg, encoding="utf-8")
+        send_alert(f"CRITICAL_FAILURE: {step_name}", err_msg)
         raise RuntimeError(f"Step {step_name} failed: {res.stderr}")
     log.info("Step %s SUCCEEDED:\n%s", step_name, res.stdout.strip())
 
@@ -67,8 +90,8 @@ def main() -> None:
         log.critical("Disaster recovery backup failed: %s", e)
         sys.exit(1)
 
-    status_file = Path("daily_job_status.txt")
-    status_file.write_text(f"STATUS: OK\nLAST_RUN_UTC: {dt.datetime.now(dt.timezone.utc).isoformat()}\nMODE: {mode}\nDATE: {today.isoformat()}\n", encoding="utf-8")
+    ok_msg = f"Routine completed successfully.\nDate: {today.isoformat()}\nMode: {mode}\nTime: {dt.datetime.now().isoformat()}"
+    send_alert("OK", ok_msg)
     log.info("=== DAILY RUN COMPLETED SUCCESSFULLY FOR %s ===", today.isoformat())
 
 if __name__ == "__main__":

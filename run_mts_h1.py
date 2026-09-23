@@ -21,7 +21,9 @@ CODE_FILES = [
     "mts_engine.py",
     "jegadeesh_titman_portfolio.py",
     "econometric_audit.py",
-    "run_mts_h1.py"
+    "run_mts_h1.py",
+    "psx_data_v2.py",
+    "daily_job.py"
 ]
 
 QUOTES_SQL = "SELECT trade_date AS date, base_symbol AS symbol, close, volume FROM daily_quotes WHERE is_final=1 AND close > 0"
@@ -91,6 +93,7 @@ SPEC = {
         "degradation_label": "DEGRADED if missing cohort sessions exceed 10%",
         "shadow_run_window": "2026-09-24 to 2026-09-30 (zero peeking at returns, feed health only)"
     },
+    "historical_mde_note": "Placebo and MDE were computed on historical daily quotes without ex-dividend adjustments since history lacked XD suffixes. Live forward run strictly captures XD/XB/XR tickers and enforces Total Return adjustments.",
     "revision_policy": "Final pre-data revision V3. Post-freeze modifications restricted to documented bug-fix amendments logged with diff in hypothesis_amendments table.",
     "friction": FrictionModel().__dict__,
 }
