@@ -38,22 +38,37 @@ def main() -> None:
     today = dt.date.today()
     log.info("=== DAILY RUN INITIATED FOR %s ===", today.isoformat())
 
-    # Step 1: Online WAL backup & offsite mirror
-    try:
-        run_step(["backup.py"], "DISASTER_RECOVERY_BACKUP")
-    except Exception as e:
-        log.critical("Backup failed: %s", e)
-        sys.exit(1)
+    # Weekend guard: PSX is closed on Saturday (5) and Sunday (6)
+    if today.weekday() >= 5:
+        log.info("Today is %s (Weekend - PSX closed). Routine completed with no actions.", today.strftime("%A"))
+        return
 
-    # Step 2: Shadow Run (pre-Oct 1) or Evaluate (post-Oct 1)
+    # Step 1: Ingest perishable feeds (Quotes, FIPI/LIPI, NCCPL MTS report)
+    log.info("Step 1: Ingesting daily perishable exchange feeds...")
+    try:
+        run_step(["psx_data_v2.py"], "CAPTURE_AND_INGEST_FEEDS")
+    except Exception as e:
+        log.warning("Live feed ingestion had warnings/issues: %s", e)
+
+    # Step 2: Pipeline Execution (Shadow mode pre-Oct 1, Live Evaluate post-Oct 1)
     mode = "shadow" if today < FREEZE_DATE else "evaluate"
-    log.info("Executing pipeline in mode: %s (Freeze date: %s)", mode, FREEZE_DATE.isoformat())
+    log.info("Step 2: Executing pipeline in mode: %s (Freeze date: %s)", mode, FREEZE_DATE.isoformat())
     try:
         run_step(["run_mts_h1.py", mode], f"PIPELINE_{mode.upper()}")
     except Exception as e:
         log.critical("Pipeline %s failed: %s", mode, e)
         sys.exit(1)
 
+    # Step 3: Disaster Recovery Backup AT THE END (ensures today's fresh data is mirrored)
+    log.info("Step 3: Running disaster recovery backup and multi-mirror sync...")
+    try:
+        run_step(["backup.py"], "DISASTER_RECOVERY_BACKUP")
+    except Exception as e:
+        log.critical("Disaster recovery backup failed: %s", e)
+        sys.exit(1)
+
+    status_file = Path("daily_job_status.txt")
+    status_file.write_text(f"STATUS: OK\nLAST_RUN_UTC: {dt.datetime.now(dt.timezone.utc).isoformat()}\nMODE: {mode}\nDATE: {today.isoformat()}\n", encoding="utf-8")
     log.info("=== DAILY RUN COMPLETED SUCCESSFULLY FOR %s ===", today.isoformat())
 
 if __name__ == "__main__":
