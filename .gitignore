@@ -16,6 +16,7 @@ CRITICAL_JOB_FAILURE.log
 scratch/
 __pycache__/
 .vscode/
+.qoder/
 
 # Environment / Secrets
 .env
