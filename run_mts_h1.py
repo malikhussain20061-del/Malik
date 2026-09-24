@@ -17,7 +17,8 @@ from econometric_audit import (
 from jegadeesh_titman_portfolio import FrictionModel, JTPortfolio, load_market_panel
 from mts_engine import (
     SignalConfig, build_cohorts, enforce_publication_lag, entry_schedule,
-    init_schema, load_signal_panel
+    init_schema, load_signal_panel,
+    require_full_sector_coverage, sector_map_map as load_sector_map, sector_map_sha256
 )
 
 CODE_FILES = [
@@ -46,7 +47,7 @@ SPEC = {
         "rejections. No calendar date is pre-committed; postponement carries zero cost and zero peeking."
     ),
     "evaluation_sessions": 240,             # 240 sessions gives MDE ~1.23% per 10-day horizon (80% power)
-    "power_statement": "Re-derived on the Amendment #13 repaired panel (amendments/recheck_placebo_mde.py, pre-data). Under sector-matched placebo matching Q5's exact composition (5 Banks, 2 E&P, 2 Cement, 1 OMC, 1 Power, 1 Fertilizer; sigma 0.730% per day, 200/200 draws), T=240 sessions yields a 10-day Simulated MDE of 1.600% (20-draw median) at 80% power (Analytic MDE 1.525%). This replaces the pre-repair figures sigma 0.626%, simulated 1.400%, analytic 1.226%: the phantom-base repair moved correctly-based tickers (HUBC, GRR, SRR, JSRR, AMTEX, BLUEX, PABC) out of merged phantom keys and into the panel, raising placebo dispersion. The fat-tail statement 'power at a 1.0% 10-day spread is ~52.4%' was computed on the pre-repair panel and has NOT been re-derived; treat it as superseded and pending. If null cannot be rejected, conclusion is: 'No crowding effect larger than 1.60% per 10 sessions detected'.",
+    "power_statement": "Re-derived on the Amendment #13 repaired panel and the Amendment #17 locked sector_map (amendments/recheck_placebo_mde.py, pre-data). Under sector-matched placebo matching Q5's exact composition by PSX sector code - 0807 x5, 0820 x2, 0804 x2, 0821 x1, 0824 x1, 0809 x1 - drawn from the 138-name universe across 27 sectors, T=240 sessions yields a 10-day Simulated MDE of 1.500% (median of 100 draws, 80% power, B=200) and an Analytic MDE of 1.440%. Median daily placebo sigma is 0.711% (p10 0.668%, p90 0.924%) with median long-run variance 5.536e-05. Power against a 1.0% 10-day spread is 58.6% (median over 25 block-resampled placebos, range 41.9%-74.7%). This supersedes the original registration (sigma 0.626%, simulated 1.400%, analytic 1.226%, power at 1.0% ~52.4%), which was computed on a panel where 8 real tickers were merged into phantom bases and on a sector grouping that split 27 sectors into 39 groups. If null cannot be rejected, conclusion is: 'No crowding effect larger than 1.50% per 10 sessions detected'.",
     "signal": {
         "column": "open_pct",
         "rank": "cross-sectional over financed names (L>0), average ties",
@@ -85,6 +86,14 @@ SPEC = {
         },
         "mts_eligible_sha256": "5c44519bf807d11feb4d674294b65a205c3f6316fb8ab9e59f696ac78fff4877",
         "mts_eligible_count": 138,
+        "sector_map_sha256": "216bb41885c59c7b0c7f53bc59a520c67a5409a83b867974b0cff9726833da35",
+        "sector_map_count": 138,
+        "sector_map_rule": "One locked point-in-time snapshot (2026-09-24) of PSX's 4-digit sector "
+                           "code per symbol, covering all 138 eligible names. Sector-neutral spread and "
+                           "the interpretation gate group on this table only; daily_quotes.sector is never "
+                           "read for grouping, because it mixes those codes with names from a hand-filed "
+                           "local list and split 27 real sectors into 39 groups. A symbol that changes "
+                           "sector during the run keeps its snapshot value.",
         "mts_eligible_sha256_superseded": {
             "hash": "d758bde4b123a4e685c9fcb597bd2d9c0dc25225d120035fb3d60d10c5dfa79d",
             "count": 139,
@@ -116,14 +125,21 @@ SPEC = {
         "Sector-Neutral Crowding Spread: within-sector mean(Q5 - sector_universe)"
     ],
     "sector_neutral_spread_formula": {
+        "sector_source": "sector_map table only (locked 2026-09-24 snapshot of PSX 4-digit sector codes); daily_quotes.sector is never used for grouping",
         "definition": "S_t = sum_{s in S} (N_{Q5, s} / |Q5|) * (R_{Q5, s, t} - R_{U, s, t})",
         "eligible_universe_in_sector": "R_{U, s, t} includes all eligible stocks in sector s (including Q5 members)",
         "monopoly_sector_rule": "If sector s contains only Q5 stocks in eligible universe, spread for sector s is set to 0",
-        "execution": "Computed via identical JT sleeve engine with sector-filtered schedules"
+        "execution": "Computed via identical JT sleeve engine with sector-filtered schedules",
+        "q5_sector_composition": {
+            "0807": 5, "0820": 2, "0804": 2, "0821": 1, "0824": 1, "0809": 1
+        },
+        "q5_composition_note": "Re-expressed from sector names to PSX sector codes in Amendment #17. "
+                               "Universe pools behind each slot: 0807=14, 0820=4, 0804=11, 0821=5, "
+                               "0824=8, 0809=5. The 0820 slot is the binding one at 2 of 4."
     },
     "interpretation_gate": {
         "rule": "Crowding effect confirmed ONLY IF primary test is statistically significant (p < 0.025) AND sector-neutral spread mean < 0. If primary is significant but sector-neutral spread >= 0, result is classified as Sector Exposure (e.g. macro banking drag).",
-        "null_framing": "Failure to reject implies no crowding effect larger than 1.60% per 10 sessions detected."
+        "null_framing": "Failure to reject implies no crowding effect larger than 1.50% per 10 sessions detected."
     },
     "operational_rules": {
         "max_missing_cohort_pct": 0.10,
@@ -249,6 +265,18 @@ def main(mode: str, db: str = "psx.db") -> None:
             f"Count={el_cnt} (exp {exp_el_cnt}), SHA={el_hash} (exp {exp_el_hash})"
         )
 
+    # 3b. Sector map: one locked point-in-time assignment, hashed like the universe itself
+    sm_hash, sm_cnt = sector_map_sha256(conn)
+    exp_sm_hash = SPEC["data_integrity_hashes"]["sector_map_sha256"]
+    exp_sm_cnt = SPEC["data_integrity_hashes"]["sector_map_count"]
+    if sm_hash != exp_sm_hash or sm_cnt != exp_sm_cnt:
+        raise SystemExit(
+            f"Data integrity violation: sector_map tampered! "
+            f"Count={sm_cnt} (exp {exp_sm_cnt}), SHA={sm_hash} (exp {exp_sm_hash})"
+        )
+    require_full_sector_coverage(conn, {r[0] for r in conn.execute(
+        "SELECT symbol FROM mts_eligible")})
+
     # 4. Mandatory append-only triggers integrity check
     trg = dict(conn.execute(
         "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name='corporate_actions'"
@@ -296,11 +324,10 @@ def main(mode: str, db: str = "psx.db") -> None:
     R = R.iloc[: SPEC["evaluation_sessions"]]
 
     # Sector-neutral spread calculation across cohorts via identical JT sleeve engine per SPEC
-    sec_df = pd.read_sql_query(
-        "SELECT DISTINCT base_symbol AS symbol, sector FROM daily_quotes WHERE sector IS NOT NULL AND sector != ''",
-        conn
-    )
-    sec_map = dict(zip(sec_df["symbol"], sec_df["sector"]))
+    # Locked point-in-time sector assignment from sector_map, never daily_quotes.sector:
+    # that column mixes PSX 4-digit codes with hand-filed names and splits real sectors.
+    sec_map = load_sector_map(conn)
+    require_full_sector_coverage(conn, set(cohorts["symbol"].unique()))
 
     def sector_schedule(cohorts_df: pd.DataFrame, bucket: str, sector: str, sec_map_dict: dict) -> dict[str, list[str]]:
         g = cohorts_df[cohorts_df["symbol"].map(sec_map_dict) == sector]

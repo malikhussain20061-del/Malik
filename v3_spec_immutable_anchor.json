@@ -1,8 +1,8 @@
 {
   "hypothesis_id": "MTS_CROWDING_XS_H10_V3",
-  "amendment_no": 16,
+  "amendment_no": 17,
   "status": "REGISTERED_PRE_DATA_POSTPONED",
-  "spec_sha256": "18b2f51c146b2adb573fcc0f60ee569da858e75eb2a1b8214f8d8a94ae80f794",
+  "spec_sha256": "2ca137b3e16fb992ba1c092a4e0e3f69a7ef6105200ed46103e9299edf1d9255",
   "spec": {
     "hypothesis_id": "MTS_CROWDING_XS_H10_V3",
     "test_number": 2,
@@ -11,7 +11,7 @@
     "evaluation_start": null,
     "evaluation_start_condition": "The 240-session live clock starts on the first session after a verified NCCPL primary MTS source has delivered 5 consecutive sessions with sequentially advancing internal report dates and zero parse rejections. No calendar date is pre-committed; postponement carries zero cost and zero peeking.",
     "evaluation_sessions": 240,
-    "power_statement": "Re-derived on the Amendment #13 repaired panel (amendments/recheck_placebo_mde.py, pre-data). Under sector-matched placebo matching Q5's exact composition (5 Banks, 2 E&P, 2 Cement, 1 OMC, 1 Power, 1 Fertilizer; sigma 0.730% per day, 200/200 draws), T=240 sessions yields a 10-day Simulated MDE of 1.600% (20-draw median) at 80% power (Analytic MDE 1.525%). This replaces the pre-repair figures sigma 0.626%, simulated 1.400%, analytic 1.226%: the phantom-base repair moved correctly-based tickers (HUBC, GRR, SRR, JSRR, AMTEX, BLUEX, PABC) out of merged phantom keys and into the panel, raising placebo dispersion. The fat-tail statement 'power at a 1.0% 10-day spread is ~52.4%' was computed on the pre-repair panel and has NOT been re-derived; treat it as superseded and pending. If null cannot be rejected, conclusion is: 'No crowding effect larger than 1.60% per 10 sessions detected'.",
+    "power_statement": "Re-derived on the Amendment #13 repaired panel and the Amendment #17 locked sector_map (amendments/recheck_placebo_mde.py, pre-data). Under sector-matched placebo matching Q5's exact composition by PSX sector code - 0807 x5, 0820 x2, 0804 x2, 0821 x1, 0824 x1, 0809 x1 - drawn from the 138-name universe across 27 sectors, T=240 sessions yields a 10-day Simulated MDE of 1.500% (median of 100 draws, 80% power, B=200) and an Analytic MDE of 1.440%. Median daily placebo sigma is 0.711% (p10 0.668%, p90 0.924%) with median long-run variance 5.536e-05. Power against a 1.0% 10-day spread is 58.6% (median over 25 block-resampled placebos, range 41.9%-74.7%). This supersedes the original registration (sigma 0.626%, simulated 1.400%, analytic 1.226%, power at 1.0% ~52.4%), which was computed on a panel where 8 real tickers were merged into phantom bases and on a sector grouping that split 27 sectors into 39 groups. If null cannot be rejected, conclusion is: 'No crowding effect larger than 1.50% per 10 sessions detected'.",
     "signal": {
       "column": "open_pct",
       "rank": "cross-sectional over financed names (L>0), average ties",
@@ -48,6 +48,9 @@
       },
       "mts_eligible_sha256": "5c44519bf807d11feb4d674294b65a205c3f6316fb8ab9e59f696ac78fff4877",
       "mts_eligible_count": 138,
+      "sector_map_sha256": "216bb41885c59c7b0c7f53bc59a520c67a5409a83b867974b0cff9726833da35",
+      "sector_map_count": 138,
+      "sector_map_rule": "One locked point-in-time snapshot (2026-09-24) of PSX's 4-digit sector code per symbol, covering all 138 eligible names. Sector-neutral spread and the interpretation gate group on this table only; daily_quotes.sector is never read for grouping, because it mixes those codes with names from a hand-filed local list and split 27 real sectors into 39 groups. A symbol that changes sector during the run keeps its snapshot value.",
       "mts_eligible_sha256_superseded": {
         "hash": "d758bde4b123a4e685c9fcb597bd2d9c0dc25225d120035fb3d60d10c5dfa79d",
         "count": 139,
@@ -76,14 +79,24 @@
       "Sector-Neutral Crowding Spread: within-sector mean(Q5 - sector_universe)"
     ],
     "sector_neutral_spread_formula": {
+      "sector_source": "sector_map table only (locked 2026-09-24 snapshot of PSX 4-digit sector codes); daily_quotes.sector is never used for grouping",
       "definition": "S_t = sum_{s in S} (N_{Q5, s} / |Q5|) * (R_{Q5, s, t} - R_{U, s, t})",
       "eligible_universe_in_sector": "R_{U, s, t} includes all eligible stocks in sector s (including Q5 members)",
       "monopoly_sector_rule": "If sector s contains only Q5 stocks in eligible universe, spread for sector s is set to 0",
-      "execution": "Computed via identical JT sleeve engine with sector-filtered schedules"
+      "execution": "Computed via identical JT sleeve engine with sector-filtered schedules",
+      "q5_sector_composition": {
+        "0807": 5,
+        "0820": 2,
+        "0804": 2,
+        "0821": 1,
+        "0824": 1,
+        "0809": 1
+      },
+      "q5_composition_note": "Re-expressed from sector names to PSX sector codes in Amendment #17. Universe pools behind each slot: 0807=14, 0820=4, 0804=11, 0821=5, 0824=8, 0809=5. The 0820 slot is the binding one at 2 of 4."
     },
     "interpretation_gate": {
       "rule": "Crowding effect confirmed ONLY IF primary test is statistically significant (p < 0.025) AND sector-neutral spread mean < 0. If primary is significant but sector-neutral spread >= 0, result is classified as Sector Exposure (e.g. macro banking drag).",
-      "null_framing": "Failure to reject implies no crowding effect larger than 1.60% per 10 sessions detected."
+      "null_framing": "Failure to reject implies no crowding effect larger than 1.50% per 10 sessions detected."
     },
     "operational_rules": {
       "max_missing_cohort_pct": 0.1,
@@ -103,10 +116,10 @@
     }
   },
   "code_sha256": {
-    "mts_engine.py": "acac06d6e36f43aac72da879467922fb594b0cc42cc4f63543c31005d871d987",
+    "mts_engine.py": "5ae07a6a7718fef8fde5a63c0df32516b96668f247ef365b3d621aa4e6e7ef4f",
     "jegadeesh_titman_portfolio.py": "16569da4d03f0f5292527b63735a238a01f61ee2aa47bca42c4bb0224f71cb8c",
     "econometric_audit.py": "b2d9d5ba5afa0874ca242029a96292a650d5412aa6a36abcadec7a0bd2d33e35",
-    "run_mts_h1.py": "8dc0687310228bdd88d7edc996d807171603ff1524e29044849fc03e23e5c041",
+    "run_mts_h1.py": "dac7ff7aac819150f1bcb07fc284d5850ba1fc4b036e6f5976ee7e698e629352",
     "psx_data_v2.py": "df8cfbf1aa83781f7ca43af7eae93a27f52a07f642013ffa16f374548bd50f06",
     "daily_job.py": "6257009784ed63321ffd88edce02ded7291214e92ceef3af7708995a00c49c54",
     "ca_migration.py": "719b468c3659e1993f0a9b9ab566fb2f19bd141b5ac0b2dc79b301b74b2ec7a8",
@@ -116,6 +129,7 @@
     "corporate_actions": "2b40ec46e7d4e1e4ee0c8e104ea8403a5bfe774cc6794606b7decb9c25505ebd",
     "corporate_actions_superseded": "9bd574f028fcb00da3b3aa56b3bee942db2233964d950c27648595091d75c04f",
     "mts_eligible": "5c44519bf807d11feb4d674294b65a205c3f6316fb8ab9e59f696ac78fff4877",
-    "mts_eligible_superseded": "d758bde4b123a4e685c9fcb597bd2d9c0dc25225d120035fb3d60d10c5dfa79d"
+    "mts_eligible_superseded": "d758bde4b123a4e685c9fcb597bd2d9c0dc25225d120035fb3d60d10c5dfa79d",
+    "sector_map": "216bb41885c59c7b0c7f53bc59a520c67a5409a83b867974b0cff9726833da35"
   }
 }

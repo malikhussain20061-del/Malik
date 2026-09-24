@@ -119,6 +119,21 @@ def run_all_negative_tests():
         lambda c: c.execute("DELETE FROM mts_eligible WHERE rowid = (SELECT MIN(rowid) FROM mts_eligible)")
     )
 
+    # 3b. Tamper the locked sector map (reassign one symbol to another sector)
+    run_negative_drill(
+        "sector_map_tampered",
+        lambda c: c.execute(
+            "UPDATE sector_map SET sector_code = '9999' "
+            "WHERE symbol = (SELECT MIN(symbol) FROM sector_map)")
+    )
+
+    # 3c. Drop one sector row so a universe symbol becomes unmapped
+    run_negative_drill(
+        "sector_map_incomplete",
+        lambda c: c.execute(
+            "DELETE FROM sector_map WHERE symbol = (SELECT MIN(symbol) FROM sector_map)")
+    )
+
     # 4. Tamper forward corporate action provenance (insert forward action with missing source)
     run_negative_drill(
         "forward_ca_missing_provenance",

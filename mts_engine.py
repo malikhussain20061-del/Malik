@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import hashlib
 
+import json
+
 import logging
 
 import re
@@ -93,6 +95,13 @@ CREATE TABLE IF NOT EXISTS mts_eligible(
 CREATE TABLE IF NOT EXISTS mts_anomalies(
   report_date TEXT, symbol TEXT, kind TEXT, detail TEXT,
   PRIMARY KEY(report_date, symbol, kind)
+);
+CREATE TABLE IF NOT EXISTS sector_map(
+  symbol        TEXT PRIMARY KEY,
+  sector_code   TEXT NOT NULL,
+  sector_name   TEXT,
+  source        TEXT NOT NULL,
+  snapshot_date TEXT NOT NULL
 );
 """
 
@@ -736,3 +745,43 @@ def is_upper_locked(open_px: float, upper_limit: float, tol: float = 0.005) -> b
 def is_lower_locked(open_px: float, lower_limit: float, tol: float = 0.005) -> bool:
 
     return bool(open_px <= lower_limit * (1.0 + tol))
+
+class SectorMapError(RuntimeError):
+    """sector_map is missing, incomplete, or inconsistent: sector grouping cannot be trusted."""
+
+
+def sector_map_map(conn) -> dict[str, str]:
+    """symbol -> canonical sector_code. Grouping never reads daily_quotes.sector.
+
+    daily_quotes.sector mixes PSX's 4-digit codes with names from a hand-maintained
+    local file, and the two disagree, so a dict built from it silently splits one real
+    sector into two groups and merges nothing. The code is the exchange's own key: it
+    agreed with dps.psx.com.pk on 429 of 429 comparable symbols with zero conflicts.
+    """
+    rows = conn.execute("SELECT symbol, sector_code FROM sector_map").fetchall()
+    if not rows:
+        raise SectorMapError("sector_map is empty; run amendments/build_sector_map.py before evaluation")
+    out: dict[str, str] = {}
+    for sym, code in rows:
+        if sym in out and out[sym] != code:
+            raise SectorMapError(f"sector_map has two codes for {sym}: {out[sym]} and {code}")
+        out[sym] = code
+    return out
+
+
+def require_full_sector_coverage(conn, universe: set[str]) -> None:
+    """Every evaluated name must have a sector, or the sector-neutral gate is meaningless."""
+    have = set(sector_map_map(conn))
+    missing = sorted(universe - have)
+    if missing:
+        raise SectorMapError(
+            f"{len(missing)} universe symbols have no sector mapping: {missing[:15]}")
+
+
+def sector_map_sha256(conn) -> tuple[str, int]:
+    rows = conn.execute(
+        "SELECT symbol, sector_code, sector_name, source, snapshot_date FROM sector_map "
+        "ORDER BY symbol").fetchall()
+    # Same serialization as econometric_audit.canonical_json, inlined to avoid a circular import.
+    payload = json.dumps(rows, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest(), len(rows)
