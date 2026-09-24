@@ -1,6 +1,6 @@
 {
   "hypothesis_id": "MTS_CROWDING_XS_H10_V3",
-  "amendment_no": 18,
+  "amendment_no": 19,
   "status": "REGISTERED_PRE_DATA_POSTPONED",
   "spec_sha256": "a5dad83d3e13aa52e7b59c8e6e66bbb920f070f0de17c9d5cacfcc351ac3f9c1",
   "spec": {
@@ -123,7 +123,7 @@
     "econometric_audit.py": "b2d9d5ba5afa0874ca242029a96292a650d5412aa6a36abcadec7a0bd2d33e35",
     "run_mts_h1.py": "d665cb1fd064fe3dd4ad2796dc364b32387c9a5c4392260c405697742141e0b7",
     "psx_data_v2.py": "df8cfbf1aa83781f7ca43af7eae93a27f52a07f642013ffa16f374548bd50f06",
-    "daily_job.py": "6257009784ed63321ffd88edce02ded7291214e92ceef3af7708995a00c49c54",
+    "daily_job.py": "3806fa64f40b0374b625ed0495bec9cf56188560932ddc12ef7bfe5cc3c51775",
     "ca_migration.py": "719b468c3659e1993f0a9b9ab566fb2f19bd141b5ac0b2dc79b301b74b2ec7a8",
     "add_corporate_action.py": "eee3c60a5392797539f7ce35a37b66174e1f5e32784fbcfa91b3afad2adac208"
   },

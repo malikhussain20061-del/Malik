@@ -70,8 +70,22 @@ def run_step(cmd: list[str], step_name: str) -> None:
         err_msg = f"FAILED {step_name} at {dt.datetime.now().isoformat()}\nSTDERR:\n{res.stderr}\nSTDOUT:\n{res.stdout}"
         alert_file.write_text(err_msg, encoding="utf-8")
         send_alert(f"CRITICAL_FAILURE: {step_name}", err_msg)
-        raise RuntimeError(f"Step {step_name} failed: {res.stderr}")
+        # stdout is where the feed errors actually land (psx_data_v2 prints them), so a
+        # rejection like HTTP 403 is invisible if only stderr is carried into the message.
+        raise RuntimeError(f"Step {step_name} failed: {res.stderr}\nSTDOUT: {res.stdout}"[:4000])
     log.info("Step %s SUCCEEDED:\n%s", step_name, res.stdout.strip())
+
+BLOCKED_MARKERS = ("403", "404", "Forbidden", "Not Found", "unreachable", "timed out")
+
+
+def classify_capture_failure(text: str) -> str:
+    """Distinguish 'the exchange is refusing us' from 'our parser broke'.
+
+    They need opposite responses - one is a permission/email question, the other a code fix -
+    and one generic FAILURE status hides which of the two happened.
+    """
+    return "FEED_BLOCKED" if any(m in text for m in BLOCKED_MARKERS) else "FEED_PARSE_FAILURE"
+
 
 def main() -> None:
     today = dt.date.today()
@@ -83,14 +97,16 @@ def main() -> None:
         return
 
     capture_failed = False
+    capture_status = None
     # Step 1: Ingest perishable feeds (Quotes, FIPI/LIPI, NCCPL MTS report)
     log.info("Step 1: Ingesting daily perishable exchange feeds...")
     try:
         run_step(["psx_data_v2.py"], "CAPTURE_AND_INGEST_FEEDS")
     except Exception as e:
         capture_failed = True
-        log.error("Live feed ingestion failed: %s", e)
-        send_alert("WARNING_FEED_CAPTURE_FAILED", f"psx_data_v2.py capture encountered failure: {e}")
+        capture_status = classify_capture_failure(str(e))
+        log.error("Live feed ingestion failed (%s): %s", capture_status, e)
+        send_alert(capture_status, f"psx_data_v2.py capture failed as {capture_status}: {e}")
 
     # Check feed freshness in database
     import sqlite3
@@ -165,9 +181,16 @@ def main() -> None:
         sys.exit(1)
 
     if capture_failed:
-        warn_msg = f"Routine completed with CAPTURE WARNINGS.\nDate: {today.isoformat()}\nMode: {mode}\nTime: {dt.datetime.now().isoformat()}"
-        send_alert("COMPLETED_WITH_CAPTURE_FAILURE", warn_msg)
-        log.warning("=== DAILY RUN COMPLETED WITH WARNINGS FOR %s ===", today.isoformat())
+        warn_msg = (f"Routine completed with {capture_status}.\nDate: {today.isoformat()}\n"
+                    f"Mode: {mode}\nTime: {dt.datetime.now().isoformat()}\n"
+                    f"Next action: "
+                    + ("exchange refused our requests - do NOT retry; settle access with PSX, "
+                       "and backfill this day from a manually downloaded closing-rate file."
+                       if capture_status == "FEED_BLOCKED" else
+                       "feed answered but the data did not ingest - this is a parser or schema "
+                       "problem, check CRITICAL_JOB_FAILURE.log."))
+        send_alert(f"COMPLETED_WITH_{capture_status}", warn_msg)
+        log.warning("=== DAILY RUN COMPLETED WITH %s FOR %s ===", capture_status, today.isoformat())
     elif had_gap:
         gap_summary = f"Routine completed with GAP WARNING.\nDate: {today.isoformat()}\nMode: {mode}\nTime: {dt.datetime.now().isoformat()}\nMissed session must be backfilled from PSX closing sheet."
         send_alert("COMPLETED_WITH_GAP", gap_summary)
