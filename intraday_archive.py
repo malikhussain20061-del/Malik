@@ -1,22 +1,26 @@
-"""intraday_archive.py - collect our own intraday record, one snapshot per scheduler tick.
+"""intraday_archive.py - DISABLED. Built and measured, then gated behind written permission.
 
-Why this exists: psx.db only holds end-of-day quotes, so VWAP, gap, 5-minute and 30-minute
-event responses cannot be computed at all today. The only legitimate way to get that history
-is to start collecting it now and let it accumulate.
+Why it is switched off: PSX Terms of Use (psx.com.pk/psx/terms-of-use, "Proprietary Rights")
+forbid, without written permission, running robots/spiders against the site and doing
+"systematic retrieval" of content to build a database. Checking robots.txt was not enough -
+dps.psx.com.pk serves no robots.txt at all, and a robots file speaks for crawlers, not for the
+contract. A permission request has been emailed to marketdatarequest@psx.com.pk.
 
-Why it is worth polling at all - measured, not assumed. Existing raw_archive captures show the
-market-watch page genuinely changes during the session (13:30, 14:17 and 14:40 on 2026-09-21 are
-three different SHA-256s) and is static after the close (18:30 and 18:57 on 2026-09-23 are the
-same bytes). So: poll inside market hours, and do not re-write a page whose hash we already hold.
+The measurement that made this worth building is kept so the work is not lost: existing
+raw_archive captures show the market-watch page genuinely changing during the session
+(13:30, 14:17 and 14:40 on 2026-09-21 are three different SHA-256s) and static after the close
+(18:30 and 18:57 on 2026-09-23 are identical bytes). So the cadence and the same-hash skip were
+both correct; only the permission is missing.
 
-This module stores data and nothing else. It sends no alert, computes no signal, and writes no
-row that the MTS hypothesis reads.
+To enable, put a real value in alerts_config.json under "psx_written_permission" recording what
+PSX granted. Without it every entry point refuses and says why.
 """
 
 from __future__ import annotations
 
 import gzip
 import hashlib
+import json
 import os
 import sqlite3
 import sys
@@ -28,11 +32,32 @@ from zoneinfo import ZoneInfo
 
 PKT = ZoneInfo("Asia/Karachi")
 URL = "https://dps.psx.com.pk/market-watch"
-UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+CONFIG = Path("alerts_config.json")
 OUT = Path("raw_archive/intraday")
 # PSX regular session is 09:00-15:30 PKT; the margins catch the pre-open and the close auction.
 WINDOW = (dtime(8, 55), dtime(15, 40))
 MAX_FETCHES_PER_DAY = 120     # a 5-minute cadence needs ~81; this is the runaway guard
+
+
+def permission() -> str | None:
+    """Written PSX permission, or None. Absence disables the module."""
+    if not CONFIG.exists():
+        return None
+    try:
+        v = json.loads(CONFIG.read_text(encoding="utf-8")).get("psx_written_permission")
+    except Exception:
+        return None
+    return v if isinstance(v, str) and v.strip() else None
+
+
+def require_permission(action: str) -> int:
+    grant = permission()
+    if grant:
+        return 0
+    print(f"[REFUSED] {action}: PSX Terms of Use forbid systematic retrieval without written\n"
+          f"          permission. Record what PSX granted under \"psx_written_permission\" in\n"
+          f"          {CONFIG} (gitignored). See walkthrough.md.")
+    return 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS intraday_snapshots(
@@ -53,7 +78,8 @@ def in_session(now: datetime | None = None) -> bool:
 
 
 def fetch() -> bytes:
-    req = urllib.request.Request(URL, headers=UA)
+    import psx_news
+    req = urllib.request.Request(URL, headers=psx_news.user_agent())
     with urllib.request.urlopen(req, timeout=25) as r:
         return r.read()
 
@@ -137,12 +163,18 @@ def loop(interval: int = 300) -> None:
 
 def main():
     os.chdir(str(Path(__file__).resolve().parent))
-    conn = sqlite3.connect("psx.db", timeout=60)
-    conn.executescript(SCHEMA)
     mode = sys.argv[1] if len(sys.argv) > 1 else "auto"
     if mode == "status":
+        conn = sqlite3.connect("psx.db", timeout=60)
+        conn.executescript(SCHEMA)
         print(status(conn))
-    elif mode == "force":
+        conn.close()
+        return
+    if require_permission(f"intraday snapshot ({mode})") != 0:
+        return
+    conn = sqlite3.connect("psx.db", timeout=60)
+    conn.executescript(SCHEMA)
+    if mode == "force":
         print(snapshot(conn))
     elif mode == "loop":
         conn.close()

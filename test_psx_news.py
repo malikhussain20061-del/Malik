@@ -83,28 +83,62 @@ def test_scheduled_as_follows_phrasing():
     print("  [PASS] both phrasings yield the right date")
 
 
+def _all_feeds(conn, today, parsed=20, stamp="09:00:00"):
+    for feed in N.FEEDS:
+        conn.execute("INSERT INTO news_runs(started_at_pkt,feed,status,rows_seen,rows_new,error,"
+                     "parsed,failed) VALUES (?,?,?,?,?,?,?,?)",
+                     (f"{today}T{stamp}", feed, "SUCCESS", 25, parsed, None if parsed else "x",
+                      parsed, 0))
+    conn.commit()
+
+
 def test_heartbeat_uses_latest_run_per_feed():
     print("\n[TEST 5] Health scores the latest run per feed, not every run today...")
     conn, path = _conn()
     conn.execute("DELETE FROM news_runs")
     today = datetime.now(N.PKT).date().isoformat()
-    # broken at 09:00, fixed at 09:30
-    conn.execute("INSERT INTO news_runs(started_at_pkt,feed,status,rows_seen,rows_new,error,parsed,failed)"
-                 " VALUES (?,?,?,?,?,?,?,?)", (f"{today}T09:00:00", "C", "SUCCESS", 25, 0, "x", 0, 0))
-    conn.execute("INSERT INTO news_runs(started_at_pkt,feed,status,rows_seen,rows_new,error,parsed,failed)"
-                 " VALUES (?,?,?,?,?,?,?,?)", (f"{today}T09:30:00", "C", "SUCCESS", 25, 20, None, 20, 0))
-    conn.commit()
-    ok, msg = N.check_health(conn, today=today)
+    _all_feeds(conn, today, parsed=0, stamp="09:00:00")          # broken at 09:00
+    _all_feeds(conn, today, parsed=20, stamp="09:30:00")         # fixed at 09:30
+    ok, msg = N.check_health(conn, today=today,
+                              now=datetime.fromisoformat(f"{today}T09:35:00+05:00"))
     assert ok, f"a fixed feed still alerts all day: {msg}"
-    # now break it again as the latest run
-    conn.execute("INSERT INTO news_runs(started_at_pkt,feed,status,rows_seen,rows_new,error,parsed,failed)"
-                 " VALUES (?,?,?,?,?,?,?,?)", (f"{today}T10:00:00", "C", "SUCCESS", 25, 0, "x", 0, 0))
-    conn.commit()
-    ok2, msg2 = N.check_health(conn, today=today)
+    _all_feeds(conn, today, parsed=0, stamp="10:00:00")          # broken again
+    ok2, msg2 = N.check_health(conn, today=today,
+                               now=datetime.fromisoformat(f"{today}T10:05:00+05:00"))
     assert not ok2 and "parsed 0" in msg2, msg2
     conn.close()
     os.remove(path)
     print("  [PASS] recovered feed goes quiet; a fresh outage still alerts")
+
+
+def test_missing_feed_and_stall_are_outages():
+    print("\n[TEST 10] A feed that never ran, and one that stalled, are both outages...")
+    conn, path = _conn()
+    conn.execute("DELETE FROM news_runs")
+    today = datetime.now(N.PKT).date().isoformat()
+    noon = datetime.fromisoformat(f"{today}T12:00:00+05:00")
+    for feed in list(N.FEEDS)[:4]:                                # E never ran
+        conn.execute("INSERT INTO news_runs(started_at_pkt,feed,status,rows_seen,rows_new,error,"
+                     "parsed,failed) VALUES (?,?,?,?,?,?,?,?)",
+                     (f"{today}T11:58:00", feed, "SUCCESS", 25, 20, None, 20, 0))
+    conn.commit()
+    ok, msg = N.check_health(conn, today=today, now=noon)
+    assert not ok and "E" in msg and "no run recorded" in msg, msg
+    # now every feed ran, but one stalled 90 minutes ago
+    conn.execute("DELETE FROM news_runs")
+    _all_feeds(conn, today, parsed=20, stamp="11:58:00")
+    conn.execute("UPDATE news_runs SET started_at_pkt=? WHERE feed='A'",
+                 (f"{today}T10:20:00",))
+    conn.commit()
+    ok2, msg2 = N.check_health(conn, today=today, now=noon)
+    assert not ok2 and "stalled" in msg2, f"90-min-old run A not flagged: {msg2}"
+    # the same stall outside polling hours must NOT alert, or every morning starts noisy
+    ok3, msg3 = N.check_health(conn, today=today,
+                               now=datetime.fromisoformat(f"{today}T22:30:00+05:00"))
+    assert ok3, f"off-hours stall alerted: {msg3}"
+    conn.close()
+    os.remove(path)
+    print("  [PASS] missing feed caught; stall caught in-hours; ignored overnight")
 
 
 def test_no_run_recorded_is_an_outage():
@@ -177,6 +211,84 @@ def test_ocr_dates_are_flagged_for_verification():
     print("  [PASS] calendar names the OCR count and warns before acting")
 
 
+def test_clause_5_9_2_scope_split():
+    print("\n[TEST 11] The 7-day clause is applied only to accounts/entitlement meetings...")
+    inside = ("approve the Annual Audited Financial Statements of the company for the year ended "
+              "June 30, 2026", "consider results and declare dividend", "bonus issue")
+    outside = ("approve the minutes of the last meeting", "consider acquisition of plant",
+               None, "")
+    for a in inside:
+        assert N.rule_scope(a) == "IN_SCOPE_5.9.2", a
+    for a in outside:
+        assert N.rule_scope(a) == "OUT_OF_SCOPE", a
+    conn, path = _conn()
+    conn.execute("DELETE FROM board_meetings")
+    for doc, ag in (("IN.pdf", "consider annual accounts and interim dividend"),
+                    ("OUT.pdf", "approve minutes of the previous meeting")):
+        conn.execute("INSERT INTO board_meetings(doc_id,symbol,company,meeting_date,agenda,"
+                     "date_status,captured_at_pkt,is_current,date_source) "
+                     "VALUES (?,?,?,?,?,?,?,?, 'PDF_TEXT')",
+                     (doc, "TST", "Test Co", "2026-10-15", ag, "parsed",
+                      "2026-09-24T10:00:00+05:00", 1))
+    conn.commit()
+    cal = N.daily_calendar_message(conn, today="2026-10-10", horizon_days=20)
+    assert "7-day rule applies" in cal and "outside 5.9.2" in cal, cal
+    assert "applies to 1 of 2" in cal, cal
+    conn.close()
+    os.remove(path)
+    print("  [PASS] 4 in-scope and 4 out-of-scope agendas classified; calendar counts 1 of 2")
+
+
+def test_manual_ocr_check_is_recorded():
+    print("\n[TEST 12] OCR accuracy is only knowable if human checks are stored...")
+    conn, path = _conn()
+    conn.execute("DELETE FROM board_meetings")
+    conn.execute("INSERT INTO board_meetings(doc_id,symbol,meeting_date,date_status,date_source,"
+                 "captured_at_pkt,is_current) VALUES (?,?,?,?,?,?,1)",
+                 ("O1.pdf", "TST", "2026-10-15", "parsed_ocr_VERIFY", "OCR",
+                  "2026-09-24T10:00:00+05:00"))
+    conn.commit()
+    N.record_manual_check(conn, "O1.pdf", "WRONG:2026-10-16")
+    row = conn.execute("SELECT manual_check, manual_check_at FROM board_meetings "
+                       "WHERE doc_id='O1.pdf'").fetchone()
+    assert row[0] == "WRONG:2026-10-16" and row[1], row
+    try:
+        N.record_manual_check(conn, "O1.pdf", "maybe")
+        raise AssertionError("accepted a meaningless verdict")
+    except ValueError:
+        pass
+    conn.close()
+    os.remove(path)
+    print("  [PASS] verdict stored with a timestamp; a nonsense verdict is rejected")
+
+
+def test_intraday_archive_refuses_without_permission():
+    print("\n[TEST 13] Intraday polling refuses to run while PSX permission is pending...")
+    import intraday_archive as A
+    assert A.permission() is None, "a permission token is present; the gate is not holding"
+    assert A.require_permission("test") == 3, "module allowed itself to run"
+    # the window/dedupe logic is still correct, so re-enabling later is a config change only
+    assert not A.in_session(datetime(2026, 9, 26, 11, 0, tzinfo=A.PKT)), "Saturday polled"
+    assert A.in_session(datetime(2026, 9, 25, 11, 0, tzinfo=A.PKT)), "Friday 11:00 rejected"
+    assert not A.in_session(datetime(2026, 9, 25, 17, 0, tzinfo=A.PKT)), "after-close polled"
+    print("  [PASS] refuses without permission; window logic still weekday 08:55-15:40")
+
+
+def test_cadence_slows_after_the_close():
+    print("\n[TEST 14] Polling cadence: 5 min in session, 30 min after, nothing overnight...")
+    import news_job as J
+    d = "2026-09-25"                                  # a Friday
+    at = lambda h, m: datetime.fromisoformat(f"{d}T{h:02d}:{m:02d}:00+05:00")
+    assert J.cadence_seconds(at(11, 0)) == 300
+    assert J.cadence_seconds(at(17, 59)) == 300, "still inside the active window"
+    assert J.cadence_seconds(at(19, 0)) == 1800       # results are often filed in the evening
+    assert J.cadence_seconds(at(21, 30)) is None, "past the last slot"
+    assert J.cadence_seconds(at(3, 0)) is None
+    sat = datetime.fromisoformat("2026-09-26T11:00:00+05:00")
+    assert J.cadence_seconds(sat) is None, "weekend polling scheduled"
+    print("  [PASS] 09:00-18:00 = 300s, 18:00-21:00 = 1800s, else None")
+
+
 def test_suite():
     print("=" * 72)
     print("  PSX NEWS MODULE REGRESSION SUITE")
@@ -186,9 +298,12 @@ def test_suite():
                test_heartbeat_uses_latest_run_per_feed, test_no_run_recorded_is_an_outage,
                test_superseded_meeting_kept_not_deleted,
                test_liquidity_uses_traded_value_not_share_count,
-               test_ocr_dates_are_flagged_for_verification):
+               test_ocr_dates_are_flagged_for_verification,
+               test_missing_feed_and_stall_are_outages, test_clause_5_9_2_scope_split,
+               test_manual_ocr_check_is_recorded, test_intraday_archive_refuses_without_permission,
+               test_cadence_slows_after_the_close):
         fn()
-    print("\n[ALL TESTS PASSED] 9/9 news-monitor regressions pinned.")
+    print("\n[ALL TESTS PASSED] 14/14 news-monitor regressions pinned.")
 
 
 if __name__ == "__main__":

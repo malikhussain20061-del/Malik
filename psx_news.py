@@ -20,23 +20,46 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import json
+import logging
 import re
 import sqlite3
 import time
 import urllib.parse
 import urllib.request
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
 
+log = logging.getLogger("psx_news")
+
 PKT = ZoneInfo("Asia/Karachi")
 BASE = "https://dps.psx.com.pk"
 ANNOUNCEMENTS_URL = f"{BASE}/announcements"
-UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-      "X-Requested-With": "XMLHttpRequest"}
 RAW_DIR = Path("raw_archive")
+
+
+def user_agent() -> dict:
+    """Identify ourselves honestly. PSX's Terms of Use are under review for this access, so a
+    request should at least be attributable - a bare browser user agent is exactly what makes
+    automated polling look like abuse. Contact comes from alerts_config.json and is never
+    invented: if it is missing we log that, rather than publish a placeholder address."""
+    cfg = {}
+    if Path("alerts_config.json").exists():
+        try:
+            cfg = json.loads(Path("alerts_config.json").read_text(encoding="utf-8"))
+        except Exception:
+            cfg = {}
+    contact = str(cfg.get("contact") or "").strip()
+    if not contact:
+        log.warning('alerts_config.json has no "contact" (name + email); requests to PSX are '
+                    "currently anonymous apart from a generic user agent")
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    if contact:
+        ua += f" (personal research; {contact})"
+    return {"User-Agent": ua, "X-Requested-With": "XMLHttpRequest"}
 
 # Values read off the page's own <select name="type">, not invented.
 FEEDS = {"A": "CDC Notices", "B": "SECP Notices", "C": "Companies Announcements",
@@ -139,9 +162,23 @@ def init_schema(conn: sqlite3.Connection) -> None:
     for col, decl in (("is_current", "INTEGER NOT NULL DEFAULT 1"),
                       ("date_source", "TEXT NOT NULL DEFAULT 'PDF_TEXT'"),
                       ("superseded_by", "TEXT"),
-                      ("superseded_reason", "TEXT")):
+                      ("superseded_reason", "TEXT"),
+                      ("manual_check", "TEXT"),
+                      ("manual_check_at", "TEXT")):
         if col not in mtgs:
             conn.execute(f"ALTER TABLE board_meetings ADD COLUMN {col} {decl}")
+    conn.commit()
+
+
+def record_manual_check(conn, doc_id: str, verdict: str) -> None:
+    """Log a human reading of an OCR date: CORRECT or WRONG[:actual date].
+
+    Without this the OCR accuracy rate is unknowable, and "OCR works fine" stays a feeling.
+    """
+    if verdict not in ("CORRECT", "WRONG") and not verdict.startswith("WRONG:"):
+        raise ValueError(f"verdict must be CORRECT or WRONG[:date], got {verdict!r}")
+    conn.execute("UPDATE board_meetings SET manual_check=?, manual_check_at=? WHERE doc_id=?",
+                 (verdict, datetime.now(PKT).isoformat(timespec="seconds"), doc_id))
     conn.commit()
 
 
@@ -160,7 +197,7 @@ def archive_raw(tag: str, content: bytes) -> str:
 
 def _get(url: str, payload: dict | None = None, timeout: int = 25) -> bytes:
     data = urllib.parse.urlencode(payload).encode() if payload else None
-    req = urllib.request.Request(url, data=data, headers=UA)
+    req = urllib.request.Request(url, data=data, headers=user_agent())
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
@@ -603,10 +640,23 @@ def dividend_context(conn, symbol: str | None) -> str:
     return f"{symbol} declared cash: " + ", ".join(f"Rs {a:,.2f} ex {d}" for d, a in rows)
 
 
+# Clause 5.9.2 binds only a meeting "specially called for consideration of its quarterly and
+# annual accounts or for declaration of any entitlement". Calling every board meeting a 7-day
+# notice event would overstate what the regulation actually requires.
+ENTITLEMENT_RE = re.compile(
+    r"account|financial|result|dividend|bonus|right issue|entitlement|interim|audited|un-audited",
+    re.I)
+
+
+def rule_scope(agenda: str | None) -> str:
+    """IN_SCOPE = the 7-day clause applies; OUT_OF_SCOPE = agenda is something else."""
+    return "IN_SCOPE_5.9.2" if ENTITLEMENT_RE.search(agenda or "") else "OUT_OF_SCOPE"
+
+
 def daily_calendar_message(conn, horizon_days: int = 10, today: str | None = None) -> str:
-    from datetime import date, timedelta
+    from datetime import date as _d
     today = today or datetime.now(PKT).date().isoformat()
-    until = (date.fromisoformat(today) + timedelta(days=horizon_days)).isoformat()
+    until = (_d.fromisoformat(today) + timedelta(days=horizon_days)).isoformat()
     rows = conn.execute(
         "SELECT meeting_date, symbol, company, meeting_time, agenda, date_source FROM board_meetings "
         "WHERE meeting_date BETWEEN ? AND ? AND is_current=1 ORDER BY meeting_date, symbol",
@@ -617,7 +667,14 @@ def daily_calendar_message(conn, horizon_days: int = 10, today: str | None = Non
     lines = [f"[BOARD CALENDAR] {today} .. {until}  ({len(rows)} meetings with a parsed date)"]
     for d, sym, comp, t, ag, src in rows:
         mark = "  <-- OCR, VERIFY against the PDF" if src == "OCR" else ""
-        lines.append(f"  {d}  {sym or '-':10} {t or 'time n/a'}  {(ag or 'agenda not extracted')[:62]}{mark}")
+        scope = "7-day rule applies" if rule_scope(ag) == "IN_SCOPE_5.9.2" else "agenda outside 5.9.2"
+        lines.append(f"  {d}  {sym or '-':10} {t or 'time n/a'}  [{scope}]  "
+                     f"{(ag or 'agenda not extracted')[:52]}{mark}")
+    inside = sum(1 for r in rows if rule_scope(r[4]) == "IN_SCOPE_5.9.2")
+    lines.append(f"  clause 5.9.2 (at least one week advance notice) applies to {inside} of "
+                 f"{len(rows)}; the other {len(rows) - inside} are agenda items the clause does "
+                 f"not cover. Where the agenda was not extracted the scope is judged on that "
+                 f"blank and may be wrong.")
     if ocr:
         lines.append(f"  {ocr} of {len(rows)} dates came from OCR, not the PDF text layer. OCR misreads")
         lines.append("  digits (02/07, 00/08); open the notice before acting on those.")
@@ -705,31 +762,54 @@ def market_filter(conn, lookback: int = 50) -> dict:
 
 
 # ---------------------------------------------------------------- item 2: heartbeat
-def check_health(conn, today: str | None = None) -> tuple[bool, str]:
+POLL_WINDOW = (dtime(9, 0), dtime(21, 0))   # matches news_job.loop's cadence
+STALE_MINUTES = 30
+
+
+def check_health(conn, today: str | None = None, now: datetime | None = None) -> tuple[bool, str]:
     """A trading day where we fetched but parsed nothing is an outage, not a quiet market.
 
-    The first version of this module logged SUCCESS while reading zero meetings, which is how
-    a broken feed survives for nine days unnoticed on the MTS side. Never repeat that.
+    Two independent failures are checked, because they look identical from the outside: a feed
+    that runs and stores nothing, and a feed that stopped running. The first version of this
+    module logged SUCCESS while reading zero meetings, which is how the MTS feed stayed dead
+    for nine days unnoticed.
     """
-    today = today or datetime.now(PKT).date().isoformat()
+    now = now or datetime.now(PKT)
+    today = today or now.date().isoformat()
     # Only the latest run per feed matters. Scoring every run in the day meant a feed that
-    # was broken at 09:00 and fixed at 09:30 kept alerting all day, which trains the reader
-    # to ignore the alert.
+    # was broken at 09:00 and fixed at 09:30 kept alerting all afternoon.
     runs = conn.execute(
-        "SELECT feed, status, rows_seen, parsed, failed, error FROM news_runs r "
+        "SELECT feed, status, rows_seen, parsed, failed, error, MAX(started_at_pkt) FROM news_runs r "
         "WHERE started_at_pkt LIKE ? AND started_at_pkt = ("
         "  SELECT MAX(started_at_pkt) FROM news_runs WHERE feed=r.feed AND started_at_pkt LIKE ?) "
-        "ORDER BY feed", (today + "%", today + "%")).fetchall()
+        "GROUP BY feed ORDER BY feed", (today + "%", today + "%")).fetchall()
     if not runs:
         return False, f"{today}: no news run recorded at all - the monitor did not execute"
-    failed = [r for r in runs if r[1] == "FAILED" or r[4]]
-    empty = [r for r in runs if r[1] == "SUCCESS" and r[3] == 0]
-    if failed or empty:
-        parts = []
-        for f in failed:
-            parts.append(f"{f[0]}: {f[5] or 'reported failure'}")
-        for e in empty:
-            parts.append(f"{e[0]}: fetched {e[2]} rows but parsed 0")
-        return False, f"{today}: NEWS_MONITOR_UNHEALTHY - " + "; ".join(parts)
+    problems = []
+    got = {r[0] for r in runs}
+    for f in (r for r in runs if r[1] == "FAILED" or r[4]):
+        problems.append(f"{f[0]}: {f[5] or 'reported failure'}")
+    for f in (r for r in runs if r[1] == "SUCCESS" and r[3] == 0):
+        problems.append(f"{f[0]}: fetched {f[2]} rows but parsed 0")
+    missing = sorted(set(FEEDS) - got)
+    if missing:
+        problems.append(f"no run recorded today for feed(s) {missing}")
+    # Staleness only means something while the poller is supposed to be awake.
+    if now.weekday() < 5 and POLL_WINDOW[0] <= now.time() <= POLL_WINDOW[1]:
+        for f, last in ((r[0], r[6]) for r in runs):
+            try:
+                seen = datetime.fromisoformat(last)
+            except (TypeError, ValueError):
+                problems.append(f"{f}: unreadable run timestamp {last!r}")
+                continue
+            if seen.tzinfo is None:
+                # A naive stamp used to be skipped in silence, which switched the stall check
+                # off for exactly the rows most likely to come from a hand-edited or older run.
+                seen = seen.replace(tzinfo=PKT)
+            age = (now - seen).total_seconds() / 60
+            if age > STALE_MINUTES:
+                problems.append(f"{f}: last run {age:.0f} min ago (>{STALE_MINUTES} = stalled)")
+    if problems:
+        return False, f"{today}: NEWS_MONITOR_UNHEALTHY - " + "; ".join(problems)
     return True, (f"{today}: {len(runs)} feed run(s) ok, "
                   f"{sum(r[3] for r in runs)} announcements parsed")

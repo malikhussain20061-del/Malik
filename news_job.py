@@ -116,15 +116,33 @@ def weekly_report(conn, days: int = 7) -> str:
                       "GROUP BY 1 ORDER BY 2 DESC", (since,)).fetchall()
     ocr_dates = conn.execute("SELECT COUNT(*) FROM board_meetings WHERE date_source='OCR' "
                              "AND meeting_date IS NOT NULL").fetchone()[0]
+    # Date extraction quality, because "OCR works" is only a claim until it is counted.
+    tot_mt = conn.execute("SELECT COUNT(*) FROM board_meetings WHERE captured_at_pkt>=?",
+                          (since,)).fetchone()[0]
+    parsed_mt = conn.execute("SELECT COUNT(*) FROM board_meetings WHERE captured_at_pkt>=? "
+                             "AND meeting_date IS NOT NULL", (since,)).fetchone()[0]
+    checked = conn.execute("SELECT manual_check, COUNT(*) FROM board_meetings WHERE date_source='OCR' "
+                           "AND manual_check IS NOT NULL GROUP BY 1").fetchall()
     lines = [f"[WEEKLY NEWS REPORT] last {days} days, generated {datetime.now(PKT).isoformat()}"]
     for status, n, parsed, failed in runs:
         lines.append(f"  runs {status:8}: {n:4}  parsed={parsed}  failed={failed}")
     lines.append(f"  announcements stored: {total}   distinct doc_ids: {dup_guard[0]} "
                  f"(equal means no duplicates slipped in: {dup_guard[0] == dup_guard[1]})")
+    rate = f"{parsed_mt / tot_mt * 100:.0f}%" if tot_mt else "n/a"
+    lines.append(f"  meeting notices: {tot_mt}, date extracted from {parsed_mt} ({rate})")
     lines.append("  board-meeting date outcomes:")
     for st, n in mt:
         lines.append(f"     {st:28} {n}")
     lines.append(f"  dates recovered only by OCR (need manual verify): {ocr_dates}")
+    if checked:
+        good = sum(n for k, n in checked if k == "CORRECT")
+        bad = sum(n for k, n in checked if k and k.startswith("WRONG"))
+        lines.append(f"  OCR dates a human checked: {good + bad} of {ocr_dates} -> "
+                     f"{good} correct, {bad} WRONG"
+                     + (f"  => OCR error rate {bad / (good + bad) * 100:.0f}%" if good + bad else ""))
+    else:
+        lines.append(f"  OCR dates a human checked: 0 of {ocr_dates} -> accuracy is UNKNOWN. "
+                     f"Use psx_news.record_manual_check(conn, doc_id, 'CORRECT'|'WRONG:YYYY-MM-DD')")
     mf = N.market_filter(conn)
     lines.append(f"  market proxy: {mf.get('regime')} ({mf.get('label')}), "
                  f"{mf.get('pct_above_ma')}% vs its 50-session mean, "
@@ -133,19 +151,50 @@ def weekly_report(conn, days: int = 7) -> str:
     return "\n".join(lines)
 
 
-def loop(interval: int = 300, until=dtime(18, 0)) -> None:
-    """Poll until `until` PKT, then exit so the next daily trigger starts a fresh day.
+ACTIVE = (dtime(9, 0), dtime(18, 0))     # session + immediate after-hours, every 5 min
+LATE = (dtime(18, 0), dtime(21, 0))      # results are often filed in the evening, every 30 min
 
-    Task Scheduler's /sc minute repetition is bounded by a Duration from the start boundary on
-    the start date; a task built that way reported "Next Run: N/A" and would probably never
-    fire again. The MTS job that has run for days uses a plain daily trigger, so the cadence
-    lives here and the task only starts us once at 09:00.
+
+def cadence_seconds(now: datetime, active=300, late=1800) -> int | None:
+    """None means sleep through it: weekends and the overnight gap are not polling time.
+
+    Announcements keep arriving after the close - the notices seen today were timestamped
+    15:04 and 16:06 PKT - so stopping at 15:30 would miss the busiest filing window.
+    """
+    if now.weekday() >= 5:
+        return None
+    t = now.time()
+    if ACTIVE[0] <= t < ACTIVE[1]:
+        return active
+    if LATE[0] <= t < LATE[1]:
+        return late
+    return None
+
+
+def loop(active: int = 300, late: int = 1800) -> None:
+    """Poll on the cadence above until 21:00 PKT, then exit for tomorrow's daily trigger.
+
+    Task Scheduler's /sc minute repetition is bounded by a Duration measured from the start
+    boundary on the start date; a task built that way reported "Next Run: N/A" and would
+    probably never fire again. The MTS job that has run for days uses a plain daily trigger, so
+    the cadence lives here and the task only has to start us once at 09:00.
     """
     while True:
         now = datetime.now(PKT)
-        if now.time() >= until:
-            print(f"[done] reached {until} PKT, exiting until tomorrow's trigger", flush=True)
+        if now.time() >= LATE[1]:
+            print(f"[done] past {LATE[1]} PKT, exiting until tomorrow's trigger", flush=True)
             return
+        wait = cadence_seconds(now, active, late)
+        if wait is None:
+            nxt = now.replace(hour=9, minute=0, second=0, microsecond=0)
+            if now >= nxt:
+                nxt += timedelta(days=1)
+            while now.weekday() >= 5:
+                nxt += timedelta(days=1)
+                now = nxt
+            print(f"[sleep] off-hours, next poll {nxt.isoformat()}", flush=True)
+            time.sleep(max(60, (nxt - datetime.now(PKT)).total_seconds()))
+            continue
         fd = acquire_lock()
         if fd is None:
             print("[skip] another news_job holds the lock", flush=True)
@@ -157,7 +206,7 @@ def loop(interval: int = 300, until=dtime(18, 0)) -> None:
             finally:
                 release_lock(fd)
                 conn.close()
-        time.sleep(interval)
+        time.sleep(wait)
 
 
 def main():
@@ -166,7 +215,8 @@ def main():
     os.chdir(str(Path(__file__).resolve().parent))
     mode = sys.argv[1] if len(sys.argv) > 1 else "run"
     if mode == "loop":
-        loop(int(sys.argv[2]) if len(sys.argv) > 2 else 300)
+        loop(int(sys.argv[2]) if len(sys.argv) > 2 else 300,
+             int(sys.argv[3]) if len(sys.argv) > 3 else 1800)
         return
     # The 18:30 MTS pipeline writes the same database. WAL lets readers and one writer
     # coexist, but a 5-minute poll hitting a write lock would otherwise raise immediately.

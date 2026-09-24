@@ -1,4 +1,12 @@
 {
   "telegram_bot_token": "PASTE_FROM_BOTFATHER",
-  "telegram_chat_id": "PASTE_FROM_getUpdates"
+  "telegram_chat_id": "PASTE_FROM_getUpdates",
+  "contact": "YOUR NAME <you@example.com>",
+  "psx_written_permission": "",
+  "_notes": {
+    "telegram_bot_token": "from @BotFather /newbot. Never paste it into chat or commit it.",
+    "telegram_chat_id": "send your bot any message, then read chat.id from getUpdates.",
+    "contact": "appended to the User-Agent on every PSX request so the polling is attributable rather than anonymous.",
+    "psx_written_permission": "leave empty. intraday_archive.py refuses to run until PSX grants written permission; put what they granted here."
+  }
 }
