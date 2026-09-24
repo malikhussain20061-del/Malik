@@ -56,20 +56,37 @@ def release_lock(fd):
         pass
 
 
+PLACEHOLDER = ("PASTE_", "YOUR ", "EXAMPLE.COM", "XXXX", "CHANGEME")
+
+
+def telegram_status(path=CONFIG) -> tuple[bool, str]:
+    """Why Telegram is or is not usable, without ever echoing a credential."""
+    if not path.exists():
+        return False, (f"{path.resolve()} does not exist. It is NOT the same file as "
+                       f"alerts_config.example.json - the example is a template and is never read.")
+    try:
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return False, f"{path.resolve()} is not valid JSON ({type(e).__name__}: {str(e)[:90]})"
+    problems = []
+    for key, label in (("telegram_bot_token", "bot token"), ("telegram_chat_id", "chat id")):
+        v = str(cfg.get(key) or "").strip()
+        if not v:
+            problems.append(f"{label} is empty in {path}")
+        elif any(v.upper().startswith(p) or p in v.upper() for p in PLACEHOLDER):
+            problems.append(f"{label} still says {v.split()[0]!r} - that is template text, "
+                            f"not a real value")
+    return (False, "Telegram not usable: " + "; ".join(problems)) if problems else (True, "ready")
+
+
 def notifier_factory():
     """Returns (notify, delivered) so a run can tell 'formatted' from 'actually sent'."""
-    cfg = {}
-    if CONFIG.exists():
-        try:
-            cfg = json.loads(CONFIG.read_text(encoding="utf-8"))
-        except Exception as e:
-            print(f"[!] alerts_config.json unreadable: {e}")
-    token = cfg.get("telegram_bot_token")
-    chat = cfg.get("telegram_chat_id")
-    if not (token and chat):
-        print("[!] Telegram NOT configured. Messages are printed, not delivered. "
-              "Fill alerts_config.json (gitignored).")
+    ready, why = telegram_status()
+    if not ready:
+        print(f"[!] {why}")
         return (lambda text: print("\n----- would send -----\n" + text)), False
+    cfg = json.loads(CONFIG.read_text(encoding="utf-8"))
+    token, chat = cfg["telegram_bot_token"], cfg["telegram_chat_id"]
     import urllib.request
 
     def send(text):
@@ -79,7 +96,9 @@ def notifier_factory():
         try:
             urllib.request.urlopen(req, timeout=15)
         except Exception as e:
-            print(f"[!] telegram delivery failed: {type(e).__name__}")
+            # The reason usually says whether the token or the chat id is wrong, and never
+            # needs the token echoed to say so.
+            print(f"[!] telegram delivery failed: {type(e).__name__}: {str(e)[:160]}")
 
     return send, True
 
@@ -222,6 +241,11 @@ def main():
     # coexist, but a 5-minute poll hitting a write lock would otherwise raise immediately.
     conn = sqlite3.connect("psx.db", timeout=60)
     N.init_schema(conn)
+    if mode == "check-telegram":
+        ready, why = telegram_status()
+        print(("READY: " if ready else "NOT READY: ") + why)
+        print(f"expected file: {CONFIG.resolve()}")
+        return
     if mode == "report":
         print(weekly_report(conn))
         return

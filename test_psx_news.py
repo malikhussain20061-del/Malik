@@ -289,6 +289,44 @@ def test_cadence_slows_after_the_close():
     print("  [PASS] 09:00-18:00 = 300s, 18:00-21:00 = 1800s, else None")
 
 
+def test_telegram_diagnosis_names_the_real_reason():
+    print("\n[TEST 15] The 'not configured' warning must say WHY, and never echo a token...")
+    import json
+    import tempfile
+    from pathlib import Path
+    import news_job as J
+    d = Path(tempfile.mkdtemp())
+    p = d / "cfg.json"
+    cases = {}
+
+    p.unlink(missing_ok=True)
+    cases["missing"] = J.telegram_status(p)
+    p.write_text(json.dumps({"telegram_bot_token": "", "telegram_chat_id": ""}), encoding="utf-8")
+    cases["empty"] = J.telegram_status(p)
+    p.write_text(json.dumps({"telegram_bot_token": "PASTE_FROM_BOTFATHER",
+                             "telegram_chat_id": "1"}), encoding="utf-8")
+    cases["placeholder"] = J.telegram_status(p)
+    p.write_text("{ broken", encoding="utf-8")
+    cases["badjson"] = J.telegram_status(p)
+    secret = "123456789:AAExampleTokenMustNotBePrinted"
+    p.write_text(json.dumps({"telegram_bot_token": secret, "telegram_chat_id": "42"}),
+                 encoding="utf-8")
+    cases["ready"] = J.telegram_status(p)
+
+    for name in ("missing", "empty", "placeholder", "badjson"):
+        ok, why = cases[name]
+        assert not ok, f"{name} reported ready"
+        assert why, f"{name} gave no reason"
+    assert not cases["missing"][1].startswith("Telegram not usable")  # names the real cause
+    assert "does not exist" in cases["missing"][1]
+    assert "template text" in cases["placeholder"][1]
+    assert "not valid JSON" in cases["badjson"][1]
+    assert cases["ready"][0] is True
+    # the point of the whole config-file design: nothing here prints a credential
+    assert all(secret not in w for _, w in cases.values())
+    print("  [PASS] 4 failure modes each named specifically; token never echoed")
+
+
 def test_suite():
     print("=" * 72)
     print("  PSX NEWS MODULE REGRESSION SUITE")
@@ -301,9 +339,10 @@ def test_suite():
                test_ocr_dates_are_flagged_for_verification,
                test_missing_feed_and_stall_are_outages, test_clause_5_9_2_scope_split,
                test_manual_ocr_check_is_recorded, test_intraday_archive_refuses_without_permission,
-               test_cadence_slows_after_the_close):
+               test_cadence_slows_after_the_close,
+               test_telegram_diagnosis_names_the_real_reason):
         fn()
-    print("\n[ALL TESTS PASSED] 14/14 news-monitor regressions pinned.")
+    print("\n[ALL TESTS PASSED] 15/15 news-monitor regressions pinned.")
 
 
 if __name__ == "__main__":
