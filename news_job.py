@@ -10,7 +10,7 @@ import os
 import sqlite3
 import sys
 import time
-from datetime import datetime, time as dtime, timedelta
+from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -228,11 +228,52 @@ def loop(active: int = 300, late: int = 1800) -> None:
         time.sleep(wait)
 
 
+def digest() -> str:
+    """The three lines that answer 'is anything broken today', in one screen.
+
+    Order is deliberate: the MTS feed date is the one that gates the real experiment, the
+    tamper drill is the only thing that checks the locked code hash during shadow mode, and
+    news health is the collector's own pulse.
+    """
+    import subprocess
+    import sqlite3 as _sqlite3
+    conn = _sqlite3.connect("psx.db", timeout=60)
+    N.init_schema(conn)
+    row = conn.execute("SELECT MAX(report_date) FROM mts_snapshots").fetchone()
+    mts = row[0] or "NONE"
+    if row[0]:
+        days = (datetime.now(PKT).date() - date.fromisoformat(row[0])).days
+        mts += f"  ({days} days old)"
+    try:
+        out = subprocess.run([sys.executable, "guard_drill.py"], capture_output=True,
+                             text=True, encoding="utf-8", timeout=900)
+        passed = (out.stdout or "").count("[PASS]")
+        failed = (out.stdout or "").count("[FAIL]")
+        drill = (f"{passed} PASS / {failed} FAIL" if passed or failed
+                 else f"no result (exit {out.returncode})")
+    except Exception as e:
+        drill = f"DRILL DID NOT RUN: {type(e).__name__}"
+    ok, health = N.check_health(conn)
+    conn.close()
+    return (f"{datetime.now(PKT).strftime('%Y-%m-%d %H:%M PKT')}\n"
+            f"  MTS feed      : {mts}\n"
+            f"  guard_drill   : {drill}\n"
+            f"  news monitor  : {health}")
+
+
 def main():
     # Task Scheduler starts a job with an unpredictable working directory, and every path in
     # this module (psx.db, raw_archive, alerts_config.json) is relative.
     os.chdir(str(Path(__file__).resolve().parent))
     mode = sys.argv[1] if len(sys.argv) > 1 else "run"
+    if mode == "digest":
+        msg = digest()
+        print(msg)
+        ready, _ = telegram_status()
+        if ready:
+            notify, _ = notifier_factory()
+            notify(msg)
+        return
     if mode == "loop":
         loop(int(sys.argv[2]) if len(sys.argv) > 2 else 300,
              int(sys.argv[3]) if len(sys.argv) > 3 else 1800)
