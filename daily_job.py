@@ -34,10 +34,21 @@ def send_alert(status: str, detail: str) -> None:
         f"STATUS: {status}\nTIMESTAMP_PKT: {dt.datetime.now().isoformat()}\nDETAIL:\n{detail}\n",
         encoding="utf-8"
     )
-    # 2. Telegram / Webhook notification if environment variables configured
+    # 2. Telegram / Webhook notification. Credentials live in alerts_config.json (gitignored),
+    #    because a Task Scheduler job running without an interactive logon never loads user
+    #    environment variables, so an env-var-only design silently disables every alert.
     import os, urllib.request, json
-    tg_token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    tg_chat = os.environ.get("TELEGRAM_CHAT_ID")
+    cfg = {}
+    cfg_path = Path("alerts_config.json")
+    if cfg_path.exists():
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            log.warning("alerts_config.json unreadable: %s", e)
+    tg_token = cfg.get("telegram_bot_token") or os.environ.get("TELEGRAM_BOT_TOKEN")
+    tg_chat = cfg.get("telegram_chat_id") or os.environ.get("TELEGRAM_CHAT_ID")
+    if not (tg_token and tg_chat):
+        log.warning("Telegram not configured (alerts_config.json missing keys); local status file only.")
     if tg_token and tg_chat:
         try:
             tg_url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
@@ -139,6 +150,18 @@ def main() -> None:
         run_step(["backup.py"], "DISASTER_RECOVERY_BACKUP")
     except Exception as e:
         log.critical("Disaster recovery backup failed: %s", e)
+        sys.exit(1)
+
+    # Step 4: Guard drill. shadow mode returns from run_mts_h1 before verify_registration,
+    # so this nightly drill is the only thing that detects a drifted CODE_FILES hash. It runs
+    # on an isolated DB copy, so the real ledger is not at risk.
+    log.info("Step 4: Running guard drill (tamper + code-hash verification)...")
+    try:
+        run_step(["guard_drill.py"], "GUARD_DRILL")
+    except Exception as e:
+        log.critical("Guard drill failed - integrity of the registered code/data is unverified: %s", e)
+        send_alert("GUARD_DRILL_FAILED",
+                   f"Guard drill FAILED on {today.isoformat()}.\n{str(e)[:3000]}")
         sys.exit(1)
 
     if capture_failed:

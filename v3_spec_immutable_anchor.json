@@ -1,8 +1,8 @@
 {
   "hypothesis_id": "MTS_CROWDING_XS_H10_V3",
-  "amendment_no": 12,
+  "amendment_no": 16,
   "status": "REGISTERED_PRE_DATA_POSTPONED",
-  "spec_sha256": "8c5afa18a0d07b50f5a6dc80cf687aeeea3a789571822bc96c1a638f82ef1e47",
+  "spec_sha256": "18b2f51c146b2adb573fcc0f60ee569da858e75eb2a1b8214f8d8a94ae80f794",
   "spec": {
     "hypothesis_id": "MTS_CROWDING_XS_H10_V3",
     "test_number": 2,
@@ -11,7 +11,7 @@
     "evaluation_start": null,
     "evaluation_start_condition": "The 240-session live clock starts on the first session after a verified NCCPL primary MTS source has delivered 5 consecutive sessions with sequentially advancing internal report dates and zero parse rejections. No calendar date is pre-committed; postponement carries zero cost and zero peeking.",
     "evaluation_sessions": 240,
-    "power_statement": "Under sector-matched placebo matching Q5's exact composition (5 Banks, 2 E&P, 2 Cement, 1 OMC, 1 Power, 1 Fertilizer; sigma ~0.626%), T=240 sessions yields 10-day Simulated MDE of 1.400% (20-draw median) at 80% power (Analytic MDE 1.226%). Power at 1.0% 10-day spread is ~52.4% under empirical fat tails. If null cannot be rejected, conclusion is: 'No crowding effect larger than 1.40% per 10 sessions detected'.",
+    "power_statement": "Re-derived on the Amendment #13 repaired panel (amendments/recheck_placebo_mde.py, pre-data). Under sector-matched placebo matching Q5's exact composition (5 Banks, 2 E&P, 2 Cement, 1 OMC, 1 Power, 1 Fertilizer; sigma 0.730% per day, 200/200 draws), T=240 sessions yields a 10-day Simulated MDE of 1.600% (20-draw median) at 80% power (Analytic MDE 1.525%). This replaces the pre-repair figures sigma 0.626%, simulated 1.400%, analytic 1.226%: the phantom-base repair moved correctly-based tickers (HUBC, GRR, SRR, JSRR, AMTEX, BLUEX, PABC) out of merged phantom keys and into the panel, raising placebo dispersion. The fat-tail statement 'power at a 1.0% 10-day spread is ~52.4%' was computed on the pre-repair panel and has NOT been re-derived; treat it as superseded and pending. If null cannot be rejected, conclusion is: 'No crowding effect larger than 1.60% per 10 sessions detected'.",
     "signal": {
       "column": "open_pct",
       "rank": "cross-sectional over financed names (L>0), average ties",
@@ -21,7 +21,7 @@
       "missing_report": "no cohort"
     },
     "universe": {
-      "eligible": "PSX_LIQUID_PROXY_139 (fixed 139 symbols meeting session>=190, vol>=50k, close>=10, plus core MTS). Locked for entire evaluation; no mid-run universe substitution.",
+      "eligible": "PSX_LIQUID_PROXY (fixed 138 symbols meeting session>=190, vol>=50k, close>=10, plus core MTS). Locked for entire evaluation; no mid-run universe substitution. Was registered as 139 until Amendment #16 removed the phantom row 'HU', which is not a listed PSX ticker.",
       "min_volume": 50000,
       "min_price": 10.0,
       "min_names": 25,
@@ -37,10 +37,24 @@
       "corporate_actions_rule": "All corporate actions derived from Exchange LDCP gap detection (prev_close - ldcp) and ratio analysis. Pipeline halts if ex-suffix or LDCP gap occurs without matching event in corporate_actions."
     },
     "data_integrity_hashes": {
-      "corporate_actions_sha256": "9bd574f028fcb00da3b3aa56b3bee942db2233964d950c27648595091d75c04f",
-      "corporate_actions_count": 393,
-      "mts_eligible_sha256": "d758bde4b123a4e685c9fcb597bd2d9c0dc25225d120035fb3d60d10c5dfa79d",
-      "mts_eligible_count": 139
+      "corporate_actions_sha256": "2b40ec46e7d4e1e4ee0c8e104ea8403a5bfe774cc6794606b7decb9c25505ebd",
+      "corporate_actions_count": 399,
+      "corporate_actions_sha256_superseded": {
+        "hash": "9bd574f028fcb00da3b3aa56b3bee942db2233964d950c27648595091d75c04f",
+        "count": 393,
+        "amendment": 11,
+        "superseded_by": 13,
+        "why": "3 HUBC cash dividends were filed under the phantom base 'HU'; Amendment #13 VOIDed them and appended the same events under the real ticker. Active event count is unchanged at 393; the partition grows to 399 rows because VOID and corrected rows are both appended."
+      },
+      "mts_eligible_sha256": "5c44519bf807d11feb4d674294b65a205c3f6316fb8ab9e59f696ac78fff4877",
+      "mts_eligible_count": 138,
+      "mts_eligible_sha256_superseded": {
+        "hash": "d758bde4b123a4e685c9fcb597bd2d9c0dc25225d120035fb3d60d10c5dfa79d",
+        "count": 139,
+        "amendment": 10,
+        "superseded_by": 16,
+        "why": "The registered universe carried 139 rows but only 138 real names. 'HU' is a phantom inherited from the pre-#13 base_symbol defect: it is absent from PSX market-watch, has zero quote rows, and 'HUBC' - the ticker it was derived from - was already a separate member. Removing it changes no cohort, only the honesty of the count."
+      }
     },
     "portfolio": {
       "K": 10,
@@ -69,7 +83,7 @@
     },
     "interpretation_gate": {
       "rule": "Crowding effect confirmed ONLY IF primary test is statistically significant (p < 0.025) AND sector-neutral spread mean < 0. If primary is significant but sector-neutral spread >= 0, result is classified as Sector Exposure (e.g. macro banking drag).",
-      "null_framing": "Failure to reject implies no crowding effect larger than 1.40% per 10 sessions detected."
+      "null_framing": "Failure to reject implies no crowding effect larger than 1.60% per 10 sessions detected."
     },
     "operational_rules": {
       "max_missing_cohort_pct": 0.1,
@@ -92,14 +106,16 @@
     "mts_engine.py": "acac06d6e36f43aac72da879467922fb594b0cc42cc4f63543c31005d871d987",
     "jegadeesh_titman_portfolio.py": "16569da4d03f0f5292527b63735a238a01f61ee2aa47bca42c4bb0224f71cb8c",
     "econometric_audit.py": "b2d9d5ba5afa0874ca242029a96292a650d5412aa6a36abcadec7a0bd2d33e35",
-    "run_mts_h1.py": "6105db0f863d841758b4eea46a65a529332d36e8861bdce60d3442bd4d445dfb",
+    "run_mts_h1.py": "8dc0687310228bdd88d7edc996d807171603ff1524e29044849fc03e23e5c041",
     "psx_data_v2.py": "df8cfbf1aa83781f7ca43af7eae93a27f52a07f642013ffa16f374548bd50f06",
-    "daily_job.py": "a812fffe55c8f656b176c8b174b4f99ba3f3749b9998e4ecc5a6aa060e32009e",
-    "ca_migration.py": "03ccaebe283b0d70ec9374e4d845b772b3c35c5c1f317057b38c554ed235ebb2",
+    "daily_job.py": "6257009784ed63321ffd88edce02ded7291214e92ceef3af7708995a00c49c54",
+    "ca_migration.py": "719b468c3659e1993f0a9b9ab566fb2f19bd141b5ac0b2dc79b301b74b2ec7a8",
     "add_corporate_action.py": "eee3c60a5392797539f7ce35a37b66174e1f5e32784fbcfa91b3afad2adac208"
   },
   "data_sha256": {
-    "corporate_actions": "9bd574f028fcb00da3b3aa56b3bee942db2233964d950c27648595091d75c04f",
-    "mts_eligible": "d758bde4b123a4e685c9fcb597bd2d9c0dc25225d120035fb3d60d10c5dfa79d"
+    "corporate_actions": "2b40ec46e7d4e1e4ee0c8e104ea8403a5bfe774cc6794606b7decb9c25505ebd",
+    "corporate_actions_superseded": "9bd574f028fcb00da3b3aa56b3bee942db2233964d950c27648595091d75c04f",
+    "mts_eligible": "5c44519bf807d11feb4d674294b65a205c3f6316fb8ab9e59f696ac78fff4877",
+    "mts_eligible_superseded": "d758bde4b123a4e685c9fcb597bd2d9c0dc25225d120035fb3d60d10c5dfa79d"
   }
 }

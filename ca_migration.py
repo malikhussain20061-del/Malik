@@ -37,15 +37,20 @@ def rebuild_corporate_actions(conn: sqlite3.Connection) -> None:
     );
     """)
 
-    # Copy existing records into new table (with voids_action_id = NULL)
-    conn.execute("""
+    # Carry voids_action_id through when the source table already has it. Hard-coding NULL
+    # resurrects every voided row on a re-run and double-counts its replacement; NULL is
+    # correct only for the first migration, before the column existed.
+    has_voids_col = any(r[1] == "voids_action_id" for r in conn.execute(
+        "PRAGMA table_info(corporate_actions)").fetchall())
+    voids_sel = "voids_action_id" if has_voids_col else "NULL"
+    conn.execute(f"""
     INSERT INTO corporate_actions_new (
         action_id, ex_date, symbol, base_symbol, action_type,
         amount, ratio, annc_date, ingest_ts, source, voids_action_id
     )
     SELECT 
         action_id, ex_date, symbol, base_symbol, action_type,
-        amount, ratio, annc_date, ingest_ts, source, NULL
+        amount, ratio, annc_date, ingest_ts, source, {voids_sel}
     FROM corporate_actions;
     """)
 

@@ -27,9 +27,10 @@ def test_corporate_actions_suite():
     ).fetchall()
     pre_hash = hashlib.sha256(json.dumps(pre_rows, default=str).encode("utf-8")).hexdigest()
     pre_cnt = len(pre_rows)
-    assert pre_cnt == 393, f"Expected 393 rows, got {pre_cnt}"
-    assert pre_hash == "f9f5d688627131ca1132643579aea2bb2b9e25ccf75d311cb86d71b41b0c4c9f", f"Pre-hash mismatch: {pre_hash}"
-    print("[PASS] Pre-rebuild 10-column hash verified: f9f5d688... (393 rows)")
+    # Amendment #13 appended 3 VOID rows + 3 corrected HUBC rows to the historical partition.
+    assert pre_cnt == 399, f"Expected 399 partition rows, got {pre_cnt}"
+    assert pre_hash == "665e7a8c5caeb164c5a8c1f9b42a504a8f1fe9aabc8981e28aa18b97fdb5e1e4", f"Pre-hash mismatch: {pre_hash}"
+    print("[PASS] Pre-rebuild 10-column hash verified: 665e7a8c... (399 rows)")
 
     # 2. Execute Atomic Table Rebuild via single source of truth (ca_migration.py)
     rebuild_corporate_actions(conn)
@@ -42,8 +43,34 @@ def test_corporate_actions_suite():
     ).fetchall()
     post_hash = hashlib.sha256(json.dumps(post_rows, default=str).encode("utf-8")).hexdigest()
     assert post_hash == pre_hash, f"Post-rebuild hash changed: {post_hash} != {pre_hash}"
-    assert len(post_rows) == 393
-    print("[PASS] Post-rebuild 10-column hash 100% matched: f9f5d688... (393 rows)")
+    assert len(post_rows) == 399
+    print("[PASS] Post-rebuild 10-column hash 100% matched: 665e7a8c... (399 rows)")
+
+    # 3b. The economic invariant behind Amendment #13: VOID bookkeeping may grow the
+    # partition, but the count of ACTIVE events the portfolio engine sees must not move.
+    active_cnt = conn.execute(
+        "SELECT COUNT(*) FROM corporate_actions e WHERE e.ex_date < '2026-10-01' "
+        "AND e.action_type <> 'VOID' AND e.action_id NOT IN "
+        "(SELECT voids_action_id FROM corporate_actions WHERE action_type='VOID' "
+        "AND voids_action_id IS NOT NULL)").fetchone()[0]
+    assert active_cnt == 393, f"Active event count drifted: {active_cnt} != 393"
+    print("[PASS] Active corporate actions after double-exclusion still 393 (VOID is bookkeeping only)")
+
+    # 3c. The rebuild must be idempotent. It originally wrote a literal NULL into
+    # voids_action_id, so a second run un-voided Amendment #13's corrections and
+    # double-counted three HUBC dividends. Running it twice must change nothing.
+    rebuild_corporate_actions(conn)
+    twice_active = conn.execute(
+        "SELECT COUNT(*) FROM corporate_actions e WHERE e.ex_date < '2026-10-01' "
+        "AND e.action_type <> 'VOID' AND e.action_id NOT IN "
+        "(SELECT voids_action_id FROM corporate_actions WHERE action_type='VOID' "
+        "AND voids_action_id IS NOT NULL)").fetchone()[0]
+    twice_links = conn.execute(
+        "SELECT COUNT(*) FROM corporate_actions WHERE action_type='VOID' "
+        "AND voids_action_id IS NULL").fetchone()[0]
+    assert twice_active == 393, f"Second rebuild lost VOID linkage: active {twice_active} != 393"
+    assert twice_links == 0, f"Second rebuild produced {twice_links} orphan VOID rows"
+    print("[PASS] Rebuild is idempotent: 2nd run still 393 active, 0 orphan VOIDs")
 
     # 4. Check sqlite_sequence
     seq_val = conn.execute("SELECT seq FROM sqlite_sequence WHERE name='corporate_actions'").fetchone()[0]

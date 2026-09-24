@@ -19,3 +19,5 @@ __pycache__/
 
 # Environment / Secrets
 .env
+
+alerts_config.json

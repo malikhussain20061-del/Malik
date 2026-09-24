@@ -46,7 +46,7 @@ SPEC = {
         "rejections. No calendar date is pre-committed; postponement carries zero cost and zero peeking."
     ),
     "evaluation_sessions": 240,             # 240 sessions gives MDE ~1.23% per 10-day horizon (80% power)
-    "power_statement": "Under sector-matched placebo matching Q5's exact composition (5 Banks, 2 E&P, 2 Cement, 1 OMC, 1 Power, 1 Fertilizer; sigma ~0.626%), T=240 sessions yields 10-day Simulated MDE of 1.400% (20-draw median) at 80% power (Analytic MDE 1.226%). Power at 1.0% 10-day spread is ~52.4% under empirical fat tails. If null cannot be rejected, conclusion is: 'No crowding effect larger than 1.40% per 10 sessions detected'.",
+    "power_statement": "Re-derived on the Amendment #13 repaired panel (amendments/recheck_placebo_mde.py, pre-data). Under sector-matched placebo matching Q5's exact composition (5 Banks, 2 E&P, 2 Cement, 1 OMC, 1 Power, 1 Fertilizer; sigma 0.730% per day, 200/200 draws), T=240 sessions yields a 10-day Simulated MDE of 1.600% (20-draw median) at 80% power (Analytic MDE 1.525%). This replaces the pre-repair figures sigma 0.626%, simulated 1.400%, analytic 1.226%: the phantom-base repair moved correctly-based tickers (HUBC, GRR, SRR, JSRR, AMTEX, BLUEX, PABC) out of merged phantom keys and into the panel, raising placebo dispersion. The fat-tail statement 'power at a 1.0% 10-day spread is ~52.4%' was computed on the pre-repair panel and has NOT been re-derived; treat it as superseded and pending. If null cannot be rejected, conclusion is: 'No crowding effect larger than 1.60% per 10 sessions detected'.",
     "signal": {
         "column": "open_pct",
         "rank": "cross-sectional over financed names (L>0), average ties",
@@ -56,7 +56,7 @@ SPEC = {
         "missing_report": "no cohort"
     },
     "universe": {
-        "eligible": "PSX_LIQUID_PROXY_139 (fixed 139 symbols meeting session>=190, vol>=50k, close>=10, plus core MTS). Locked for entire evaluation; no mid-run universe substitution.",
+        "eligible": "PSX_LIQUID_PROXY (fixed 138 symbols meeting session>=190, vol>=50k, close>=10, plus core MTS). Locked for entire evaluation; no mid-run universe substitution. Was registered as 139 until Amendment #16 removed the phantom row 'HU', which is not a listed PSX ticker.",
         "min_volume": 50000,
         "min_price": 10.0,
         "min_names": 25,
@@ -72,10 +72,29 @@ SPEC = {
         "corporate_actions_rule": "All corporate actions derived from Exchange LDCP gap detection (prev_close - ldcp) and ratio analysis. Pipeline halts if ex-suffix or LDCP gap occurs without matching event in corporate_actions."
     },
     "data_integrity_hashes": {
-        "corporate_actions_sha256": "9bd574f028fcb00da3b3aa56b3bee942db2233964d950c27648595091d75c04f",
-        "corporate_actions_count": 393,
-        "mts_eligible_sha256": "d758bde4b123a4e685c9fcb597bd2d9c0dc25225d120035fb3d60d10c5dfa79d",
-        "mts_eligible_count": 139
+        "corporate_actions_sha256": "2b40ec46e7d4e1e4ee0c8e104ea8403a5bfe774cc6794606b7decb9c25505ebd",
+        "corporate_actions_count": 399,
+        "corporate_actions_sha256_superseded": {
+            "hash": "9bd574f028fcb00da3b3aa56b3bee942db2233964d950c27648595091d75c04f",
+            "count": 393,
+            "amendment": 11,
+            "superseded_by": 13,
+            "why": "3 HUBC cash dividends were filed under the phantom base 'HU'; Amendment #13 VOIDed "
+                   "them and appended the same events under the real ticker. Active event count is unchanged "
+                   "at 393; the partition grows to 399 rows because VOID and corrected rows are both appended."
+        },
+        "mts_eligible_sha256": "5c44519bf807d11feb4d674294b65a205c3f6316fb8ab9e59f696ac78fff4877",
+        "mts_eligible_count": 138,
+        "mts_eligible_sha256_superseded": {
+            "hash": "d758bde4b123a4e685c9fcb597bd2d9c0dc25225d120035fb3d60d10c5dfa79d",
+            "count": 139,
+            "amendment": 10,
+            "superseded_by": 16,
+            "why": "The registered universe carried 139 rows but only 138 real names. 'HU' is a phantom "
+                   "inherited from the pre-#13 base_symbol defect: it is absent from PSX market-watch, "
+                   "has zero quote rows, and 'HUBC' - the ticker it was derived from - was already a "
+                   "separate member. Removing it changes no cohort, only the honesty of the count."
+        },
     },
     "portfolio": {
         "K": 10,
@@ -104,7 +123,7 @@ SPEC = {
     },
     "interpretation_gate": {
         "rule": "Crowding effect confirmed ONLY IF primary test is statistically significant (p < 0.025) AND sector-neutral spread mean < 0. If primary is significant but sector-neutral spread >= 0, result is classified as Sector Exposure (e.g. macro banking drag).",
-        "null_framing": "Failure to reject implies no crowding effect larger than 1.40% per 10 sessions detected."
+        "null_framing": "Failure to reject implies no crowding effect larger than 1.60% per 10 sessions detected."
     },
     "operational_rules": {
         "max_missing_cohort_pct": 0.10,
