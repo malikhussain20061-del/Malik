@@ -66,7 +66,16 @@ SPEC = {
     "timing": {
         "entry_lag_sessions": 2,
         "open_time_pkt": "09:30",
-        "rule": "cohort dropped if captured_at >= entry open"
+        "rule": "cohort dropped if captured_at >= entry open",
+        "formation_key": "The report cover date (mts_snapshots.report_date), which is the date the "
+                         "positions became publicly available. Entry counts entry_lag_sessions from "
+                         "THAT date. The per-row as-of date is recorded in mts_snapshots.data_as_of "
+                         "for staleness only and is never a formation key - ranking or entering off it "
+                         "would trade on a session before the report existed.",
+        "measured_staleness": "2026-09-14 cover reported positions as of 2026-09-11: 3 calendar days "
+                              "but 1 trading session, because 12-13 September was a weekend. Logged "
+                              "daily as a PUBLICATION_LAG anomaly. A stale signal is unbiased, only "
+                              "weaker; a signal formed on its as-of date would be look-ahead.",
     },
     "valuation": {
         "total_return_via_build_adj_factor": "splits, bonuses, and cash dividends (div_wht=0.15)",

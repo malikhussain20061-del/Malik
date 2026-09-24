@@ -1,8 +1,8 @@
 {
   "hypothesis_id": "MTS_CROWDING_XS_H10_V3",
-  "amendment_no": 17,
+  "amendment_no": 18,
   "status": "REGISTERED_PRE_DATA_POSTPONED",
-  "spec_sha256": "2ca137b3e16fb992ba1c092a4e0e3f69a7ef6105200ed46103e9299edf1d9255",
+  "spec_sha256": "a5dad83d3e13aa52e7b59c8e6e66bbb920f070f0de17c9d5cacfcc351ac3f9c1",
   "spec": {
     "hypothesis_id": "MTS_CROWDING_XS_H10_V3",
     "test_number": 2,
@@ -30,7 +30,9 @@
     "timing": {
       "entry_lag_sessions": 2,
       "open_time_pkt": "09:30",
-      "rule": "cohort dropped if captured_at >= entry open"
+      "rule": "cohort dropped if captured_at >= entry open",
+      "formation_key": "The report cover date (mts_snapshots.report_date), which is the date the positions became publicly available. Entry counts entry_lag_sessions from THAT date. The per-row as-of date is recorded in mts_snapshots.data_as_of for staleness only and is never a formation key - ranking or entering off it would trade on a session before the report existed.",
+      "measured_staleness": "2026-09-14 cover reported positions as of 2026-09-11: 3 calendar days but 1 trading session, because 12-13 September was a weekend. Logged daily as a PUBLICATION_LAG anomaly. A stale signal is unbiased, only weaker; a signal formed on its as-of date would be look-ahead."
     },
     "valuation": {
       "total_return_via_build_adj_factor": "splits, bonuses, and cash dividends (div_wht=0.15)",
@@ -116,10 +118,10 @@
     }
   },
   "code_sha256": {
-    "mts_engine.py": "5ae07a6a7718fef8fde5a63c0df32516b96668f247ef365b3d621aa4e6e7ef4f",
+    "mts_engine.py": "ee92f2f915212c32af9f7e2d23e020b6ba57d9e1e145a9f35e2f3ad1324bff42",
     "jegadeesh_titman_portfolio.py": "16569da4d03f0f5292527b63735a238a01f61ee2aa47bca42c4bb0224f71cb8c",
     "econometric_audit.py": "b2d9d5ba5afa0874ca242029a96292a650d5412aa6a36abcadec7a0bd2d33e35",
-    "run_mts_h1.py": "dac7ff7aac819150f1bcb07fc284d5850ba1fc4b036e6f5976ee7e698e629352",
+    "run_mts_h1.py": "d665cb1fd064fe3dd4ad2796dc364b32387c9a5c4392260c405697742141e0b7",
     "psx_data_v2.py": "df8cfbf1aa83781f7ca43af7eae93a27f52a07f642013ffa16f374548bd50f06",
     "daily_job.py": "6257009784ed63321ffd88edce02ded7291214e92ceef3af7708995a00c49c54",
     "ca_migration.py": "719b468c3659e1993f0a9b9ab566fb2f19bd141b5ac0b2dc79b301b74b2ec7a8",

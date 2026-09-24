@@ -145,15 +145,33 @@ def test_layout_drift_aborts():
         print(f"  [PASS] Drift caught: {e}")
 
 
+def test_formation_key_is_publication_date():
+    print("\n[TEST 8] Formation key is the cover date, never the per-row as-of date...")
+    df, diag = M.parse_mts_pdf(_golden_pdf())
+    assert diag["report_date"] == GOLDEN_DATE, \
+        f"formation key drifted: {diag['report_date']}"
+    assert diag["data_as_of"] == "2026-09-11", \
+        f"as-of date not captured, staleness is invisible: {diag['data_as_of']}"
+    assert diag["data_as_of"] < diag["report_date"], \
+        "positions dated on/after publication would mean the signal knows the future"
+    # The row-level date must never become the snapshot key: that would let the engine
+    # trade on a session before the report existed publicly.
+    stored = set(df["raw_symbol"])
+    assert stored and GOLDEN_DATE == diag["report_date"]
+    print(f"  [PASS] forms on {diag['report_date']}, positions as of {diag['data_as_of']} "
+          f"(staleness recorded, not used as key)")
+
+
 def test_suite():
     print("=" * 72)
     print("  MTS PARSER REGRESSION SUITE (golden 2026-09-14 report)")
     print("=" * 72)
     for fn in (test_golden_parse, test_boundary_glyphs_excluded, test_fragmented_number_joined,
                test_ambiguous_cell_raises, test_rate_band_still_enforced,
-               test_missing_rate_tolerated_but_counted, test_layout_drift_aborts):
+               test_missing_rate_tolerated_but_counted, test_layout_drift_aborts,
+               test_formation_key_is_publication_date):
         fn()
-    print("\n[ALL TESTS PASSED] Coordinate-based MTS reader verified on all 7 cases.")
+    print("\n[ALL TESTS PASSED] Coordinate-based MTS reader verified on all 8 cases.")
 
 
 if __name__ == "__main__":

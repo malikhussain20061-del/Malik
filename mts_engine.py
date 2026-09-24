@@ -76,6 +76,8 @@ CREATE TABLE IF NOT EXISTS mts_snapshots(
 
   report_sha256 TEXT NOT NULL,
 
+  data_as_of TEXT,
+
   PRIMARY KEY(report_date, symbol)
 
 );
@@ -112,7 +114,9 @@ CREATE TABLE IF NOT EXISTS sector_map(
 def init_schema(conn: sqlite3.Connection) -> None:
 
     conn.executescript(SCHEMA)
-
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(mts_snapshots)")}
+    if "data_as_of" not in cols:
+        conn.execute("ALTER TABLE mts_snapshots ADD COLUMN data_as_of TEXT")
     conn.commit()
 
 
@@ -309,6 +313,7 @@ def parse_mts_pdf(pdf_path: str | Path, amount_tol: float = 0.01) -> tuple[pd.Da
         report_date = pd.to_datetime(dm.group(1)).strftime("%Y-%m-%d")
 
     records, rejected, header_seen, grand_total = [], [], False, None
+    row_dates = []
     for pno in range(len(doc)):
         page = doc[pno]
         words = _page_words(page)
@@ -352,6 +357,10 @@ def parse_mts_pdf(pdf_path: str | Path, amount_tol: float = 0.01) -> tuple[pd.Da
                     rejected.append((pno, sym_raw, r))
                     continue
                 records.append(rec)
+                try:
+                    row_dates.append(pd.Timestamp(str(r[1]).strip()).strftime("%Y-%m-%d"))
+                except Exception:
+                    pass
 
     doc.close()
     if not header_seen:
@@ -369,8 +378,17 @@ def parse_mts_pdf(pdf_path: str | Path, amount_tol: float = 0.01) -> tuple[pd.Da
     if df["open_pct"].median() > 5.0:
         raise ParseIntegrityError("open_pct distribution implausible (median > 5%)")
 
+    # The printed per-row "Report Date" is the position as-of date, which is NOT the
+    # report_date above (the publication date on the cover). The signal is ranked and
+    # entered from the publication date, so this is staleness, never a formation key.
+    as_of_counts = {d: row_dates.count(d) for d in set(row_dates)}
+    data_as_of = max(as_of_counts, key=as_of_counts.get) if as_of_counts else None
+    if len(as_of_counts) > 1:
+        log.warning("report %s mixes %d as-of dates: %s", report_date, len(as_of_counts), as_of_counts)
+
     diag = {
         "report_date": report_date,
+        "data_as_of": data_as_of,
         "n_rows": len(df),
         "n_rejected": len(rejected),
         "rejected_symbols": sorted({s for _, s, _ in rejected if s}),
@@ -499,6 +517,20 @@ def ingest_report(conn: sqlite3.Connection, pdf_path: str | Path, report_date: s
     df["report_date"] = rd
     df["captured_at"] = ts.isoformat()
     df["report_sha256"] = sha
+    df["data_as_of"] = diag["data_as_of"]
+
+    # Record how stale the positions are on the day they become tradable. This is
+    # observability, not a formation key: entry always counts from rd (publication date).
+    if diag["data_as_of"] and diag["data_as_of"] < rd:
+        lag = conn.execute(
+            "SELECT COUNT(DISTINCT trade_date) FROM daily_quotes "
+            "WHERE is_final=1 AND trade_date > ? AND trade_date <= ?",
+            (diag["data_as_of"], rd)).fetchone()[0]
+        conn.execute(
+            "INSERT OR IGNORE INTO mts_anomalies(report_date, symbol, kind, detail) VALUES (?,?,?,?)",
+            (rd, "*", "PUBLICATION_LAG",
+             f"positions as of {diag['data_as_of']}, published {rd}, {lag} sessions stale; "
+             f"captured {ts.strftime('%Y-%m-%d')}"))
 
     # Sanity: implied price vs close on report date (catches column shift between volume/amount)
     quotes_close = pd.read_sql_query(
@@ -528,7 +560,7 @@ def ingest_report(conn: sqlite3.Connection, pdf_path: str | Path, report_date: s
 
     cols = ["report_date", "symbol", "raw_symbol", "mts_volume", "mts_amount", "new_mts_volume",
             "new_mts_amount", "weighted_rate", "open_pct", "implied_denominator",
-            "captured_at", "report_sha256"]
+            "captured_at", "report_sha256", "data_as_of"]
     conn.executemany(f"INSERT INTO mts_snapshots({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
                      df[cols].itertuples(index=False, name=None))
 
