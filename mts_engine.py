@@ -210,6 +210,81 @@ def _is_header(cells) -> bool:
     c11 = re.sub(r"\s+", " ", str(cells[11] or "")).strip().lower()
     return bool(re.search(r"symbol", c2)) and bool(re.search(r"open.*vol", c11))
 
+
+# A number token as printed in an MTS cell: optional sign/parens, digit groups, decimals.
+_NUM_RE = re.compile(r"^\(?-?[\d,]+(?:\.\d+)?\)?$")
+
+# Column titles the report must show at these positions, else the layout has drifted.
+_EXPECTED_HEADER = {
+    2: r"symbol",
+    8: r"current day.*volume",
+    9: r"current day.*amount",
+    10: r"weighted",
+    11: r"net open mts.*volume",
+    12: r"net open mts.*amount",
+    13: r"percentage",
+}
+
+
+class LayoutDriftError(ParseIntegrityError):
+    """Report column order/titles changed upstream: positional parsing would silently mislabel."""
+
+
+def _norm_cell(text) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip().lower()
+
+
+def _assert_layout(cells) -> None:
+    for col, pat in _EXPECTED_HEADER.items():
+        if col >= len(cells) or not re.search(pat, _norm_cell(cells[col])):
+            raise LayoutDriftError(
+                f"MTS report layout changed at col{col}: got {cells[col] if col < len(cells) else None!r}, "
+                f"expected /{pat}/. Refusing to parse positionally.")
+
+
+def _page_words(page) -> list:
+    """Dedup the ~21x overprinted glyph runs this report stamps on every page."""
+    seen, out = set(), []
+    for w in page.get_text("words"):
+        key = (w[4],) + tuple(round(v, 2) for v in w[:4])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(w)
+    return out
+
+
+def _contained_num(words, rect):
+    """Value of the number lying entirely inside `rect`; NaN if there is none.
+
+    Full containment is what keeps footnote glyphs out: they sit on the cell
+    border and spill outside it. Tokens are never trimmed, because chopping
+    characters off a real number risks deleting digits.
+
+    This report renders one amount across several spans ("36,961,696.9" + "2"),
+    so the contained words are re-joined in x order before parsing.
+    """
+    if rect is None:
+        return None
+    inside = []
+    for x0, y0, x1, y1, txt, *_ in words:
+        if x0 >= rect[0] and y0 >= rect[1] and x1 <= rect[2] and y1 <= rect[3]:
+            s = str(txt).strip()
+            if s:
+                inside.append((x0, s))
+    if not inside:
+        return np.nan
+    inside.sort()
+    joined = "".join(s for _, s in inside)
+    if _NUM_RE.match(joined):
+        return to_number(joined)
+    parts = {to_number(s) for _, s in inside if _NUM_RE.match(s)}
+    if len(parts) > 1:
+        raise ParseIntegrityError(
+            f"Ambiguous numeric cell at {tuple(round(v, 1) for v in rect)}: {sorted(parts)}")
+    return parts.pop() if parts else np.nan
+
+
 def parse_mts_pdf(pdf_path: str | Path, amount_tol: float = 0.01) -> tuple[pd.DataFrame, dict]:
     import pymupdf
     doc = pymupdf.open(str(pdf_path))
@@ -227,16 +302,28 @@ def parse_mts_pdf(pdf_path: str | Path, amount_tol: float = 0.01) -> tuple[pd.Da
     records, rejected, header_seen, grand_total = [], [], False, None
     for pno in range(len(doc)):
         page = doc[pno]
+        words = _page_words(page)
         for tab in page.find_tables():
-            for r in tab.extract():
+            trows = list(tab.rows)
+            for ri, r in enumerate(tab.extract()):
                 if _is_header(r):
+                    _assert_layout(r)
                     header_seen = True
                     continue
                 if len(r) < 14:
                     continue
+                rects = (trows[ri].cells if ri < len(trows) and len(trows[ri].cells) == len(r)
+                         else [None] * len(r))
+
+                def num(col, _r=r, _rects=rects):
+                    if col >= len(_r):
+                        return np.nan
+                    v = _contained_num(words, _rects[col])
+                    return to_number(_r[col]) if v is None else v
+
                 sym_raw = re.sub(r"[^A-Z0-9]", "", str(r[2] or "").upper())
                 if not sym_raw or sym_raw in NON_SYMBOL_ROWS or "TOTAL" in re.sub(r"\s+", " ", " ".join(map(str, r[:3]))).upper():
-                    gt = to_number(r[12])
+                    gt = num(12)
                     if np.isfinite(gt) and gt > 1e8:
                         grand_total = gt
                     continue
@@ -245,12 +332,12 @@ def parse_mts_pdf(pdf_path: str | Path, amount_tol: float = 0.01) -> tuple[pd.Da
                     continue
                 rec = {
                     "raw_symbol": sym_raw,
-                    "new_mts_volume": to_number(r[8]),
-                    "new_mts_amount": to_number(r[9]),
-                    "weighted_rate": to_number(r[10]),
-                    "mts_volume": to_number(r[11]),
-                    "mts_amount": to_number(r[12]),
-                    "open_pct": to_number(r[13]),
+                    "new_mts_volume": num(8),
+                    "new_mts_amount": num(9),
+                    "weighted_rate": num(10),
+                    "mts_volume": num(11),
+                    "mts_amount": num(12),
+                    "open_pct": num(13),
                 }
                 if not np.isfinite(rec["mts_volume"]) or not np.isfinite(rec["open_pct"]):
                     rejected.append((pno, sym_raw, r))
@@ -265,7 +352,10 @@ def parse_mts_pdf(pdf_path: str | Path, amount_tol: float = 0.01) -> tuple[pd.Da
         raise ParseIntegrityError("No data rows parsed from PDF")
     if (df["open_pct"] < 0).any() or (df["open_pct"] > 100).any():
         raise ParseIntegrityError("open_pct out of [0, 100] bounds")
-    if not df["weighted_rate"].between(5.0, 35.0).all():
+    # weighted_rate is diagnostic only (never a signal column), so a printed "-" is a
+    # legitimate missing value: it is counted and logged, not silently absorbed.
+    n_rate_missing = int(df["weighted_rate"].isna().sum())
+    if not df["weighted_rate"].dropna().between(5.0, 35.0).all():
         raise ParseIntegrityError("weighted_rate out of range [5, 35]")
     if df["open_pct"].median() > 5.0:
         raise ParseIntegrityError("open_pct distribution implausible (median > 5%)")
@@ -274,6 +364,8 @@ def parse_mts_pdf(pdf_path: str | Path, amount_tol: float = 0.01) -> tuple[pd.Da
         "report_date": report_date,
         "n_rows": len(df),
         "n_rejected": len(rejected),
+        "rejected_symbols": sorted({s for _, s, _ in rejected if s}),
+        "n_rate_missing": n_rate_missing,
         "grand_total": grand_total,
         "parsed_total": float(df["mts_amount"].sum())
     }
@@ -356,6 +448,16 @@ def ingest_report(conn: sqlite3.Connection, pdf_path: str | Path, report_date: s
     cap_date = ts.strftime("%Y-%m-%d")
     if rd > cap_date:
         raise ParseIntegrityError(f"Report date {rd} in PDF is in the future relative to capture date {cap_date}")
+
+    # Rows the parser could not read must never vanish silently.
+    for s in diag["rejected_symbols"]:
+        conn.execute(
+            "INSERT OR IGNORE INTO mts_anomalies(report_date, symbol, kind, detail) VALUES (?,?,?,?)",
+            (rd, s, "PARSE_ROW_REJECTED", "unreadable mts_volume or open_pct cell"))
+    if diag["n_rate_missing"]:
+        conn.execute(
+            "INSERT OR IGNORE INTO mts_anomalies(report_date, symbol, kind, detail) VALUES (?,?,?,?)",
+            (rd, "*", "RATE_MISSING_COUNT", f"{diag['n_rate_missing']} rows printed '-' for weighted_rate"))
 
     # Step 2: Check / archive raw report with authentic rd
     row = conn.execute("SELECT report_date FROM mts_raw_reports WHERE sha256=?", (sha,)).fetchone()

@@ -22,10 +22,10 @@ log = logging.getLogger("daily_job")
 
 try:
     from run_mts_h1 import SPEC
-    freeze_str = SPEC.get("freeze_date", "2026-10-01")
-    FREEZE_DATE = dt.date.fromisoformat(freeze_str)
+    eval_str = SPEC.get("evaluation_start")
+    EVAL_START = dt.date.fromisoformat(eval_str) if eval_str else None
 except Exception:
-    FREEZE_DATE = dt.date(2026, 10, 1)
+    EVAL_START = None   # unreadable spec must never trigger live evaluation
 
 def send_alert(status: str, detail: str) -> None:
     # 1. Write local status file
@@ -123,9 +123,10 @@ def main() -> None:
     except Exception as e:
         log.warning("Could not check hypothesis_ledger status: %s", e)
 
-    # Step 2: Pipeline Execution (Shadow mode pre-freeze, Live Evaluate post-freeze)
-    mode = "shadow" if today < FREEZE_DATE else "evaluate"
-    log.info("Step 2: Executing pipeline in mode: %s (Freeze date: %s)", mode, FREEZE_DATE.isoformat())
+    # Step 2: Pipeline Execution (stays shadow until a pre-data amendment commits evaluation_start)
+    mode = "shadow" if EVAL_START is None or today < EVAL_START else "evaluate"
+    log.info("Step 2: Executing pipeline in mode: %s (evaluation start: %s)",
+             mode, EVAL_START.isoformat() if EVAL_START else "not committed")
     try:
         run_step(["run_mts_h1.py", mode], f"PIPELINE_{mode.upper()}")
     except Exception as e:

@@ -1,13 +1,15 @@
 {
   "hypothesis_id": "MTS_CROWDING_XS_H10_V3",
-  "amendment_no": 11,
-  "status": "REGISTERED_PRE_DATA_FROZEN",
-  "spec_sha256": "df20190705f81d51ef787c84dd7a7d1d126a7c8c5ad586f85c356a5786d6dedd",
+  "amendment_no": 12,
+  "status": "REGISTERED_PRE_DATA_POSTPONED",
+  "spec_sha256": "8c5afa18a0d07b50f5a6dc80cf687aeeea3a789571822bc96c1a638f82ef1e47",
   "spec": {
     "hypothesis_id": "MTS_CROWDING_XS_H10_V3",
     "test_number": 2,
     "alpha": 0.025,
     "freeze_date": "2026-10-01",
+    "evaluation_start": null,
+    "evaluation_start_condition": "The 240-session live clock starts on the first session after a verified NCCPL primary MTS source has delivered 5 consecutive sessions with sequentially advancing internal report dates and zero parse rejections. No calendar date is pre-committed; postponement carries zero cost and zero peeking.",
     "evaluation_sessions": 240,
     "power_statement": "Under sector-matched placebo matching Q5's exact composition (5 Banks, 2 E&P, 2 Cement, 1 OMC, 1 Power, 1 Fertilizer; sigma ~0.626%), T=240 sessions yields 10-day Simulated MDE of 1.400% (20-draw median) at 80% power (Analytic MDE 1.226%). Power at 1.0% 10-day spread is ~52.4% under empirical fat tails. If null cannot be rejected, conclusion is: 'No crowding effect larger than 1.40% per 10 sessions detected'.",
     "signal": {
@@ -72,10 +74,12 @@
     "operational_rules": {
       "max_missing_cohort_pct": 0.1,
       "degradation_label": "DEGRADED if missing cohort sessions exceed 10%",
-      "shadow_run_window": "2026-09-24 to 2026-09-30 (zero peeking at returns, feed health only)"
+      "shadow_run_window": "2026-09-24 to 2026-09-30 (zero peeking at returns, feed health only)",
+      "shadow_window_1_outcome": "FAILED on 2026-09-24: only one MTS report date (2026-09-14) exists in the archive and the configured source has not advanced since. Postponement branch of feed_frequency_decision_rule taken."
     },
     "feed_frequency_decision_rule": "Decision by user on 2026-09-30 based on shadow log: Between Sep 24 and Sep 30, all 5 consecutive sessions must receive fresh NCCPL reports with sequentially advancing internal report dates. If any session is missed or report date remains stagnant (e.g. at 2026-09-14), Oct 1 forward run SHALL BE POSTPONED via pre-data Amendment to adapt to weekly sleeves or delay freeze date. Zero peeking, zero cost for postponement.",
-    "historical_total_return_status": "All 383 historical corporate actions backfilled via Exchange LDCP gap and ratio analysis. Full 238-day history is now pure Total Return.",
+    "feed_frequency_decision_outcome": "POSTPONED (Amendment #12, 2026-09-24, pre-data). The rule's stagnation condition is already met on shadow Day 1: the sole archived report is internal-dated 2026-09-14 and the configured source (scstrade.com MTS Report.pdf) still serves those identical bytes. The Oct 1 automatic switch to evaluate mode is removed; evaluation_start is now a condition, not a date. Weekly-sleeve adaptation was NOT taken, because a weekly sleeve would dilute the carrying-cost mechanism under test; if no daily primary source is ever found, that becomes a new hypothesis (V4), not an amendment to this one.",
+    "historical_total_return_status": "All 393 historical corporate actions backfilled via Exchange LDCP gap and ratio analysis. Full 238-day history is now pure Total Return.",
     "revision_policy": "Final pre-data revision V3. Post-freeze modifications restricted to documented bug-fix amendments logged with diff in hypothesis_amendments table.",
     "friction": {
       "brokerage_rate": 0.0015,
@@ -85,12 +89,12 @@
     }
   },
   "code_sha256": {
-    "mts_engine.py": "3a37e90a17482dc91782152a85fa712391410da74655672ada7253c1e3fe3433",
+    "mts_engine.py": "acac06d6e36f43aac72da879467922fb594b0cc42cc4f63543c31005d871d987",
     "jegadeesh_titman_portfolio.py": "16569da4d03f0f5292527b63735a238a01f61ee2aa47bca42c4bb0224f71cb8c",
     "econometric_audit.py": "b2d9d5ba5afa0874ca242029a96292a650d5412aa6a36abcadec7a0bd2d33e35",
-    "run_mts_h1.py": "fcf04e2c946d9ef32a820c34c59659de685f80a57100fc3223acbd013bf5a880",
+    "run_mts_h1.py": "6105db0f863d841758b4eea46a65a529332d36e8861bdce60d3442bd4d445dfb",
     "psx_data_v2.py": "df8cfbf1aa83781f7ca43af7eae93a27f52a07f642013ffa16f374548bd50f06",
-    "daily_job.py": "03dd31960308f103f907d15335794b33e840d15251e5c625833f12072e7a3a07",
+    "daily_job.py": "a812fffe55c8f656b176c8b174b4f99ba3f3749b9998e4ecc5a6aa060e32009e",
     "ca_migration.py": "03ccaebe283b0d70ec9374e4d845b772b3c35c5c1f317057b38c554ed235ebb2",
     "add_corporate_action.py": "eee3c60a5392797539f7ce35a37b66174e1f5e32784fbcfa91b3afad2adac208"
   },

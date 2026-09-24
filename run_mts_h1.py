@@ -37,7 +37,14 @@ SPEC = {
     "hypothesis_id": "MTS_CROWDING_XS_H10_V3",
     "test_number": 2,
     "alpha": 0.025,
-    "freeze_date": "2026-10-01",            # first report_date counted (after pre-registration window)
+    "freeze_date": "2026-10-01",            # data partition boundary only: first report_date counted, and the
+                                            # ex_date < boundary slice whose SHA-256 is ledger-locked
+    "evaluation_start": None,               # null => pipeline stays in shadow; set only by a later pre-data amendment
+    "evaluation_start_condition": (
+        "The 240-session live clock starts on the first session after a verified NCCPL primary MTS source has "
+        "delivered 5 consecutive sessions with sequentially advancing internal report dates and zero parse "
+        "rejections. No calendar date is pre-committed; postponement carries zero cost and zero peeking."
+    ),
     "evaluation_sessions": 240,             # 240 sessions gives MDE ~1.23% per 10-day horizon (80% power)
     "power_statement": "Under sector-matched placebo matching Q5's exact composition (5 Banks, 2 E&P, 2 Cement, 1 OMC, 1 Power, 1 Fertilizer; sigma ~0.626%), T=240 sessions yields 10-day Simulated MDE of 1.400% (20-draw median) at 80% power (Analytic MDE 1.226%). Power at 1.0% 10-day spread is ~52.4% under empirical fat tails. If null cannot be rejected, conclusion is: 'No crowding effect larger than 1.40% per 10 sessions detected'.",
     "signal": {
@@ -102,10 +109,22 @@ SPEC = {
     "operational_rules": {
         "max_missing_cohort_pct": 0.10,
         "degradation_label": "DEGRADED if missing cohort sessions exceed 10%",
-        "shadow_run_window": "2026-09-24 to 2026-09-30 (zero peeking at returns, feed health only)"
+        "shadow_run_window": "2026-09-24 to 2026-09-30 (zero peeking at returns, feed health only)",
+        "shadow_window_1_outcome": "FAILED on 2026-09-24: only one MTS report date (2026-09-14) exists in the "
+                                   "archive and the configured source has not advanced since. Postponement "
+                                   "branch of feed_frequency_decision_rule taken."
     },
     "feed_frequency_decision_rule": "Decision by user on 2026-09-30 based on shadow log: Between Sep 24 and Sep 30, all 5 consecutive sessions must receive fresh NCCPL reports with sequentially advancing internal report dates. If any session is missed or report date remains stagnant (e.g. at 2026-09-14), Oct 1 forward run SHALL BE POSTPONED via pre-data Amendment to adapt to weekly sleeves or delay freeze date. Zero peeking, zero cost for postponement.",
-    "historical_total_return_status": "All 383 historical corporate actions backfilled via Exchange LDCP gap and ratio analysis. Full 238-day history is now pure Total Return.",
+    "feed_frequency_decision_outcome": "POSTPONED (Amendment #12, 2026-09-24, pre-data). The rule's stagnation "
+                                       "condition is already met on shadow Day 1: the sole archived report is "
+                                       "internal-dated 2026-09-14 and the configured source "
+                                       "(scstrade.com MTS Report.pdf) still serves those identical bytes. "
+                                       "The Oct 1 automatic switch to evaluate mode is removed; evaluation_start "
+                                       "is now a condition, not a date. Weekly-sleeve adaptation was NOT taken, "
+                                       "because a weekly sleeve would dilute the carrying-cost mechanism under "
+                                       "test; if no daily primary source is ever found, that becomes a new "
+                                       "hypothesis (V4), not an amendment to this one.",
+    "historical_total_return_status": "All 393 historical corporate actions backfilled via Exchange LDCP gap and ratio analysis. Full 238-day history is now pure Total Return.",
     "revision_policy": "Final pre-data revision V3. Post-freeze modifications restricted to documented bug-fix amendments logged with diff in hypothesis_amendments table.",
     "friction": FrictionModel().__dict__,
 }
