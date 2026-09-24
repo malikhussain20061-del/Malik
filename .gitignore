@@ -21,3 +21,4 @@ __pycache__/
 .env
 
 alerts_config.json
+news_job.lock

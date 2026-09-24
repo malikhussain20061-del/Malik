@@ -25,7 +25,7 @@ import sqlite3
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -88,7 +88,8 @@ MONTHS = ("january|february|march|april|may|june|july|august|september|october|n
 DATE_RE = re.compile(rf"([0-2]?\d)(?:st|nd|rd|th)?[\s/.,-]*({MONTHS})\.?[\s,]*((?:19|20)\d{{2}})",
                      re.I)
 DATE_RE2 = re.compile(rf"({MONTHS})\.?[\s,]*([0-2]?\d)(?:st|nd|rd|th)?[\s,]*((?:19|20)\d{{2}})", re.I)
-HELD_RE = re.compile(r"(?:will be held on|is being held on|has been held on|held on)\b", re.I)
+HELD_RE = re.compile(
+    r"(?:will be held on|is being held on|has been held on|held on|scheduled as follows)[:\s]*", re.I)
 TIME_RE = re.compile(r"(\d{1,2}\s*:\s*\d{2}\s*[ap]\.?\s*m\.?)", re.I)
 AGENDA_RE = re.compile(r"(?:to consider and|following agenda[:\-]?|agenda)\s*([^.;{]{10,260})", re.I)
 CLOSE_RE = re.compile(r"close\s*period", re.I)
@@ -99,6 +100,19 @@ DATE_SCAN_RE = re.compile(
 
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    # Added after the first review: a run that recorded only "SUCCESS" hid the fact that it
+    # had parsed nothing, which is the exact silent failure this module must never repeat.
+    runs = {r[1] for r in conn.execute("PRAGMA table_info(news_runs)")}
+    for col, decl in (("parsed", "INTEGER NOT NULL DEFAULT 0"), ("failed", "INTEGER NOT NULL DEFAULT 0")):
+        if col not in runs:
+            conn.execute(f"ALTER TABLE news_runs ADD COLUMN {col} {decl}")
+    mtgs = {r[1] for r in conn.execute("PRAGMA table_info(board_meetings)")}
+    for col, decl in (("is_current", "INTEGER NOT NULL DEFAULT 1"),
+                      ("date_source", "TEXT NOT NULL DEFAULT 'PDF_TEXT'"),
+                      ("superseded_by", "TEXT"),
+                      ("superseded_reason", "TEXT")):
+        if col not in mtgs:
+            conn.execute(f"ALTER TABLE board_meetings ADD COLUMN {col} {decl}")
     conn.commit()
 
 
@@ -138,9 +152,11 @@ def _parse_date(text: str) -> str | None:
     if not num:
         return None
     try:
-        return f"{int(year):04d}-{num:02d}-{int(day):02d}"
-    except ValueError:
+        iso = f"{int(year):04d}-{num:02d}-{int(day):02d}"
+        date.fromisoformat(iso)          # reject OCR output like 2026-09-00 or 2026-02-31
+    except (ValueError, TypeError):
         return None
+    return iso
 
 
 def parse_rows(html: str, feed: str) -> list[dict]:
@@ -151,7 +167,11 @@ def parse_rows(html: str, feed: str) -> list[dict]:
         cells = [c.get_text(" ", strip=True) for c in r.find_all("td")]
         if len(cells) < 4:
             continue
-        anchors = [a for a in r.find_all("a") if str(a.get("href", "")).startswith("/download/document/")]
+        # Company announcements link /download/document/<id>.pdf; the CDC, SECP, NCCPL and PSX
+        # notice feeds link /download/attachment/<id>-1.pdf. Accepting only the first made
+        # four of the five feeds fetch 25 rows and store zero, which the heartbeat caught.
+        anchors = [a for a in r.find_all("a")
+                   if re.match(r"^/download/(document|attachment)/", str(a.get("href", "")))]
         pdf = f"{BASE}{anchors[0]['href']}" if anchors else None
         doc_id = anchors[0]["href"].rsplit("/", 1)[-1] if anchors else None
         sym_anchors = [a for a in r.find_all("a") if str(a.get("href", "")).startswith("/company/")]
@@ -174,8 +194,9 @@ def fetch_feed(conn, feed: str, count: int = 40) -> tuple[int, int]:
     try:
         raw = _get(ANNOUNCEMENTS_URL, payload)
     except Exception as e:
-        conn.execute("INSERT INTO news_runs VALUES (?,?,?,?,?,?)",
-                     (started, feed, "FAILED", 0, 0, f"{type(e).__name__}: {e}"[:500]))
+        conn.execute("INSERT INTO news_runs(started_at_pkt, feed, status, rows_seen, rows_new, "
+                     "error, parsed, failed) VALUES (?,?,?,?,?,?,?,?)",
+                     (started, feed, "FAILED", 0, 0, f"{type(e).__name__}: {e}"[:500], 0, 1))
         conn.commit()
         raise
     raw_sha = archive_raw(f"announcements_{feed}", raw)
@@ -192,8 +213,9 @@ def fetch_feed(conn, feed: str, count: int = 40) -> tuple[int, int]:
                             r["company"] or None, r["title"], _normalise_when(r["when"]),
                             r["pdf_url"], raw_sha, _now()))
         new += cur.rowcount
-    conn.execute("INSERT INTO news_runs VALUES (?,?,?,?,?,?)",
-                 (started, feed, "SUCCESS", len(rows), new, None))
+    conn.execute("INSERT INTO news_runs(started_at_pkt, feed, status, rows_seen, rows_new, "
+                 "error, parsed, failed) VALUES (?,?,?,?,?,?,?,?)",
+                 (started, feed, "SUCCESS", len(rows), new, None, len(rows) - skipped, 0))
     conn.commit()
     return len(rows), new
 
@@ -204,6 +226,32 @@ def _normalise_when(when: str) -> str | None:
         return None
     t = TIME_RE.search(when)
     return f"{d} {t.group(1)}" if t else d
+
+
+def _ocr_pdf(doc, max_pages: int = 2, dpi: int = 200) -> tuple[str, str]:
+    """Read an image-only notice. Its text is flagged, never trusted blind: tesseract
+    confuses 02 with 07 often enough to move a board meeting by a week."""
+    import os
+    import tempfile
+    try:
+        import pytesseract
+    except ImportError:
+        return "", "OCR_UNAVAILABLE"
+    out = []
+    for n, pg in enumerate(list(doc)[:max_pages]):
+        pix = pg.get_pixmap(dpi=dpi)
+        path = os.path.join(tempfile.gettempdir(), f"psxnews_ocr_{n}.png")
+        pix.save(path)
+        try:
+            out.append(pytesseract.image_to_string(path))
+        except Exception:
+            return "", "OCR_FAILED"
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    return re.sub(r"\s+", " ", " ".join(out)), "OCR"
 
 
 def parse_board_meeting(pdf_bytes: bytes) -> dict:
@@ -217,16 +265,19 @@ def parse_board_meeting(pdf_bytes: bytes) -> dict:
     import pymupdf
     doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
     text = re.sub(r"\s+", " ", " ".join(p.get_text() for p in doc))
+    source = "PDF_TEXT"
     if not text.strip():
-        # Several PSX notices are image-only scans with no text layer. Saying "no held
-        # phrase" would blame the wording when the real cause is that there is no text to
-        # read at all, and would hide that OCR is the missing capability.
-        return {"meeting_date": None, "meeting_time": None, "agenda": None,
-                "close_from": None, "close_to": None,
-                "date_status": "no_text_layer_needs_ocr"}
+        # Several PSX notices are image-only scans. The old status said "no_held_phrase",
+        # which blamed the wording and sent the reader hunting for a regex bug when the real
+        # cause was that the PDF has no text layer at all.
+        text, source = _ocr_pdf(doc)
+        if not text.strip():
+            return {"meeting_date": None, "meeting_time": None, "agenda": None,
+                    "close_from": None, "close_to": None, "date_source": source,
+                    "date_status": "no_text_layer_" + source.lower()}
 
     held = HELD_RE.search(text)
-    window = text[held.end():held.end() + 90] if held else ""
+    window = text[held.end():held.end() + 140] if held else ""
     meeting_date = _parse_date(window) if held else None
     tmatch = TIME_RE.search(window)
 
@@ -247,9 +298,10 @@ def parse_board_meeting(pdf_bytes: bytes) -> dict:
     return {"meeting_date": meeting_date,
             "meeting_time": tmatch.group(1) if tmatch else None,
             "agenda": agenda.group(1).strip() if agenda else None,
-            "close_from": close_from, "close_to": close_to,
-            "date_status": "parsed" if meeting_date else ("no_held_phrase" if not held
-                                                          else "date_unparseable")}
+            "close_from": close_from, "close_to": close_to, "date_source": source,
+            "date_status": ("parsed_ocr_VERIFY" if (meeting_date and source == "OCR")
+                            else "parsed" if meeting_date
+                            else ("no_held_phrase" if not held else "date_unparseable"))}
 
 
 BOARD_TITLE_RE = re.compile(r"board\s*meeting|BOD\s*meeting|meeting\s*of\s*the\s*board", re.I)
@@ -275,24 +327,33 @@ def update_board_meetings(conn, limit: int = 6) -> list[dict]:
     made = []
     for doc_id, sym, comp, url in todo:
         if not url:
-            conn.execute("INSERT OR REPLACE INTO board_meetings VALUES (?,?,?,?,?,?,?,?,?,?,0,0)",
-                         (doc_id, sym, comp, None, None, None, None, None, "no_pdf_link", _now()))
+            conn.execute("INSERT OR REPLACE INTO board_meetings(doc_id, symbol, company, meeting_date, meeting_time, agenda, close_period_from, close_period_to, date_status, captured_at_pkt, reminded_1d, reminded_day, is_current, date_source) VALUES (?,?,?,?,?,?,?,?,?,?,0,0,1,?)",
+                         (doc_id, sym, comp, None, None, None, None, None, "no_pdf_link", _now(),
+                          "NOT_ATTEMPTED"))
             continue
         try:
             b = _get(url, timeout=30)
             sha = archive_raw(f"board_meeting_{doc_id}", b)
             p = parse_board_meeting(b)
         except Exception as e:
-            conn.execute("INSERT OR REPLACE INTO board_meetings VALUES (?,?,?,?,?,?,?,?,?,?,0,0)",
+            conn.execute("INSERT OR REPLACE INTO board_meetings(doc_id, symbol, company, meeting_date, meeting_time, agenda, close_period_from, close_period_to, date_status, captured_at_pkt, reminded_1d, reminded_day, is_current, date_source) VALUES (?,?,?,?,?,?,?,?,?,?,0,0,1,?)",
                          (doc_id, sym, comp, None, None, None, None, None,
-                          f"failed:{type(e).__name__}:{str(e)[:120]}"[:60], _now()))
+                          f"failed:{type(e).__name__}:{str(e)[:120]}"[:60], _now(), "FETCH_FAILED"))
             conn.commit()
             time.sleep(1.0)
             continue
         conn.execute("UPDATE announcements SET pdf_sha256=? WHERE doc_id=?", (sha, doc_id))
-        conn.execute("INSERT OR REPLACE INTO board_meetings VALUES (?,?,?,?,?,?,?,?,?,?,0,0)",
+        conn.execute("INSERT OR REPLACE INTO board_meetings(doc_id, symbol, company, meeting_date, meeting_time, agenda, close_period_from, close_period_to, date_status, captured_at_pkt, reminded_1d, reminded_day, is_current, date_source) VALUES (?,?,?,?,?,?,?,?,?,?,0,0,1,?)",
                      (doc_id, sym, comp, p["meeting_date"], p["meeting_time"], p["agenda"],
-                      p["close_from"], p["close_to"], p["date_status"], _now()))
+                      p["close_from"], p["close_to"], p["date_status"], _now(), p["date_source"]))
+        if p["meeting_date"] and sym:
+            # Companies reschedule meetings. The newest notice drives the calendar, but the
+            # superseded row is kept, so what was announced when stays auditable.
+            conn.execute(
+                "UPDATE board_meetings SET is_current=0, superseded_by=?, superseded_reason=? "
+                "WHERE symbol=? AND is_current=1 AND doc_id<>? AND meeting_date IS NOT NULL "
+                "AND meeting_date<>?",
+                (doc_id, "superseded by later notice", sym, doc_id, p["meeting_date"]))
         made.append({"doc_id": doc_id, "symbol": sym, "company": comp, **p})
         conn.commit()
         time.sleep(1.0)
@@ -315,14 +376,16 @@ def new_alerts(conn, limit: int = 25) -> list[str]:
             "SELECT doc_id, feed_label, symbol, company, title, announced_at_pkt, pdf_url, "
             "captured_at_pkt FROM announcements WHERE alerted=0 "
             "ORDER BY captured_at_pkt DESC LIMIT ?", (limit,)):
+        warn = liquidity_flag(conn, sym)
         body = (f"[PSX NEWS] {label}\n"
                 f"{comp or sym or '-'} ({sym or 'no scrip'})\n"
                 f"{title}\n"
                 f"announced: {when or 'not stated in row'}\n"
                 f"captured : {cap} PKT\n"
                 f"context  : {price_context(conn, sym)}\n"
-                f"source   : {pdf or 'no PDF link published in row'}\n"
-                f"confidence: untested observation | {CONFIDENCE}")
+                + (f"WARNING  : {warn}\n" if warn else "")
+                + f"source   : {pdf or 'no PDF link published in row'}\n"
+                  f"confidence: untested observation | {CONFIDENCE}")
         out.append(body)
         conn.execute("UPDATE announcements SET alerted=1 WHERE doc_id=?", (doc_id,))
     conn.commit()
@@ -426,7 +489,8 @@ def meeting_history(conn, symbol: str, limit: int = 8) -> list[dict]:
     out = []
     for doc_id, mdate, agenda in conn.execute(
             "SELECT doc_id, meeting_date, agenda FROM board_meetings "
-            "WHERE symbol=? AND meeting_date IS NOT NULL ORDER BY meeting_date DESC LIMIT ?",
+            "WHERE symbol=? AND meeting_date IS NOT NULL AND is_current=1 "
+            "ORDER BY meeting_date DESC LIMIT ?",
             (symbol, limit)):
         prior = conn.execute(
             "SELECT amount, ex_date FROM corporate_actions WHERE base_symbol=? "
@@ -456,15 +520,125 @@ def daily_calendar_message(conn, horizon_days: int = 10, today: str | None = Non
     today = today or datetime.now(PKT).date().isoformat()
     until = (date.fromisoformat(today) + timedelta(days=horizon_days)).isoformat()
     rows = conn.execute(
-        "SELECT meeting_date, symbol, company, meeting_time, agenda FROM board_meetings "
-        "WHERE meeting_date BETWEEN ? AND ? ORDER BY meeting_date, symbol", (today, until)).fetchall()
+        "SELECT meeting_date, symbol, company, meeting_time, agenda, date_source FROM board_meetings "
+        "WHERE meeting_date BETWEEN ? AND ? AND is_current=1 ORDER BY meeting_date, symbol",
+        (today, until)).fetchall()
     unparsed = conn.execute(
-        "SELECT COUNT(*) FROM board_meetings WHERE meeting_date IS NULL").fetchone()[0]
+        "SELECT COUNT(*) FROM board_meetings WHERE meeting_date IS NULL AND is_current=1").fetchone()[0]
+    ocr = sum(1 for r in rows if r[5] == "OCR")
     lines = [f"[BOARD CALENDAR] {today} .. {until}  ({len(rows)} meetings with a parsed date)"]
-    for d, sym, comp, t, ag in rows:
-        lines.append(f"  {d}  {sym or '-':10} {t or 'time n/a'}  {(ag or 'agenda not extracted')[:70]}")
+    for d, sym, comp, t, ag, src in rows:
+        mark = "  <-- OCR, VERIFY against the PDF" if src == "OCR" else ""
+        lines.append(f"  {d}  {sym or '-':10} {t or 'time n/a'}  {(ag or 'agenda not extracted')[:62]}{mark}")
+    if ocr:
+        lines.append(f"  {ocr} of {len(rows)} dates came from OCR, not the PDF text layer. OCR misreads")
+        lines.append("  digits (02/07, 00/08); open the notice before acting on those.")
     if unparsed:
-        lines.append(f"  note: {unparsed} notice(s) have no machine-readable date yet "
-                     f"(image-only scans, need OCR). Not guessed.")
+        lines.append(f"  note: {unparsed} current notice(s) have no usable date "
+                     f"(image-only scan, OCR could not read it). Not guessed.")
     lines.append(f"confidence: tested facts from notice PDFs | {CONFIDENCE}")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- item 5: liquidity
+MIN_AVG_TRADED_VALUE = 10_000_000.0   # Rs 10m/day over 20 sessions, below this flag it
+
+
+def liquidity_flag(conn, symbol: str | None, window: int = 20) -> str | None:
+    """A move you cannot exit is not an opportunity. Uses traded value, not share count."""
+    if not symbol:
+        return None
+    rows = conn.execute(
+        "SELECT close, volume FROM daily_quotes WHERE base_symbol=? AND is_final=1 "
+        "AND close>0 AND volume>0 ORDER BY trade_date DESC LIMIT ?", (symbol, window)).fetchall()
+    if len(rows) < 5:
+        return "LOW LIQUIDITY (thin quote history)"
+    avg = sum(c * v for c, v in rows) / len(rows)
+    if avg < MIN_AVG_TRADED_VALUE:
+        return f"LOW LIQUIDITY (20d avg traded value Rs {avg/1e6:.1f}m)"
+    return None
+
+
+# ---------------------------------------------------------------- item 9: market filter
+def market_filter(conn, lookback: int = 50) -> dict:
+    """Equal-weight breadth PROXY from our own closes, plus advancers/decliners.
+
+    This is deliberately NOT called KSE-100. There is no index series in psx.db - no index
+    symbol and no index table - and the "KSE100" strings on the DPS market-watch page turned
+    out to be ETF/NAV rows (14.31, 6.53), not the index level. Labelling a proxy as the real
+    index would let a trade rule inherit a number nobody sourced.
+    """
+    dates = [r[0] for r in conn.execute(
+        "SELECT DISTINCT trade_date FROM daily_quotes WHERE is_final=1 ORDER BY trade_date")][-lookback:]
+    if len(dates) < 20:
+        return {"status": "INSUFFICIENT_HISTORY", "sessions": len(dates)}
+    px = {}
+    for d, sym, close in conn.execute(
+            "SELECT trade_date, base_symbol, close FROM daily_quotes WHERE is_final=1 "
+            "AND close>0 AND base_symbol IS NOT NULL AND trade_date>=? ORDER BY trade_date",
+            (dates[0],)):
+        px.setdefault(sym, {})[d] = close
+    series = []
+    for sym, by_day in px.items():
+        vals = [by_day.get(d) for d in dates]
+        if sum(v is not None for v in vals) < len(dates) * 0.8:
+            continue
+        base = next((v for v in vals if v), None)
+        if base:
+            series.append([v / base if v else None for v in vals])
+    if len(series) < 30:
+        return {"status": "TOO_FEW_NAMES", "names": len(series)}
+    idx = [sum(s[i] for s in series if s[i]) / max(1, sum(1 for s in series if s[i]))
+           for i in range(len(dates))]
+    last, ma = idx[-1], sum(idx[-lookback:]) / len(idx[-lookback:])
+    prev = {d: {} for d in dates}
+    for d, sym, close in conn.execute(
+            "SELECT trade_date, base_symbol, close FROM daily_quotes WHERE is_final=1 "
+            "AND trade_date IN (%s)" % ",".join("?" * len(dates)), dates):
+        prev[d][sym] = close
+    adv = dec = 0
+    for i in range(1, len(dates)):
+        for sym, c in prev[dates[i]].items():
+            p = prev[dates[i - 1]].get(sym)
+            if p and c > p * 1.001:
+                adv += 1
+            elif p and c < p * 0.999:
+                dec += 1
+    return {"status": "OK", "label": "EQUAL-WEIGHT PROXY, not KSE-100",
+            "regime": "STRONG" if last >= ma else "WEAK",
+            "names_in_proxy": len(series), "sessions": len(dates),
+            "last_close": round(last, 4), "ma50": round(ma, 4),
+            "pct_above_ma": round((last / ma - 1) * 100, 2),
+            "advancers_last_window": adv, "decliners_last_window": dec,
+            "as_of": dates[-1]}
+
+
+# ---------------------------------------------------------------- item 2: heartbeat
+def check_health(conn, today: str | None = None) -> tuple[bool, str]:
+    """A trading day where we fetched but parsed nothing is an outage, not a quiet market.
+
+    The first version of this module logged SUCCESS while reading zero meetings, which is how
+    a broken feed survives for nine days unnoticed on the MTS side. Never repeat that.
+    """
+    today = today or datetime.now(PKT).date().isoformat()
+    # Only the latest run per feed matters. Scoring every run in the day meant a feed that
+    # was broken at 09:00 and fixed at 09:30 kept alerting all day, which trains the reader
+    # to ignore the alert.
+    runs = conn.execute(
+        "SELECT feed, status, rows_seen, parsed, failed, error FROM news_runs r "
+        "WHERE started_at_pkt LIKE ? AND started_at_pkt = ("
+        "  SELECT MAX(started_at_pkt) FROM news_runs WHERE feed=r.feed AND started_at_pkt LIKE ?) "
+        "ORDER BY feed", (today + "%", today + "%")).fetchall()
+    if not runs:
+        return False, f"{today}: no news run recorded at all - the monitor did not execute"
+    failed = [r for r in runs if r[1] == "FAILED" or r[4]]
+    empty = [r for r in runs if r[1] == "SUCCESS" and r[3] == 0]
+    if failed or empty:
+        parts = []
+        for f in failed:
+            parts.append(f"{f[0]}: {f[5] or 'reported failure'}")
+        for e in empty:
+            parts.append(f"{e[0]}: fetched {e[2]} rows but parsed 0")
+        return False, f"{today}: NEWS_MONITOR_UNHEALTHY - " + "; ".join(parts)
+    return True, (f"{today}: {len(runs)} feed run(s) ok, "
+                  f"{sum(r[3] for r in runs)} announcements parsed")
