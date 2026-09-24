@@ -10,7 +10,7 @@ import os
 import sqlite3
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -133,11 +133,41 @@ def weekly_report(conn, days: int = 7) -> str:
     return "\n".join(lines)
 
 
+def loop(interval: int = 300, until=dtime(18, 0)) -> None:
+    """Poll until `until` PKT, then exit so the next daily trigger starts a fresh day.
+
+    Task Scheduler's /sc minute repetition is bounded by a Duration from the start boundary on
+    the start date; a task built that way reported "Next Run: N/A" and would probably never
+    fire again. The MTS job that has run for days uses a plain daily trigger, so the cadence
+    lives here and the task only starts us once at 09:00.
+    """
+    while True:
+        now = datetime.now(PKT)
+        if now.time() >= until:
+            print(f"[done] reached {until} PKT, exiting until tomorrow's trigger", flush=True)
+            return
+        fd = acquire_lock()
+        if fd is None:
+            print("[skip] another news_job holds the lock", flush=True)
+        else:
+            conn = sqlite3.connect("psx.db", timeout=60)
+            try:
+                N.init_schema(conn)
+                print(json.dumps(run_once(conn)), flush=True)
+            finally:
+                release_lock(fd)
+                conn.close()
+        time.sleep(interval)
+
+
 def main():
     # Task Scheduler starts a job with an unpredictable working directory, and every path in
     # this module (psx.db, raw_archive, alerts_config.json) is relative.
     os.chdir(str(Path(__file__).resolve().parent))
     mode = sys.argv[1] if len(sys.argv) > 1 else "run"
+    if mode == "loop":
+        loop(int(sys.argv[2]) if len(sys.argv) > 2 else 300)
+        return
     # The 18:30 MTS pipeline writes the same database. WAL lets readers and one writer
     # coexist, but a 5-minute poll hitting a write lock would otherwise raise immediately.
     conn = sqlite3.connect("psx.db", timeout=60)

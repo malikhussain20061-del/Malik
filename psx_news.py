@@ -44,6 +44,25 @@ FEEDS = {"A": "CDC Notices", "B": "SECP Notices", "C": "Companies Announcements"
 
 CONFIDENCE = "sirf khabar - buy/sell advice nahi"
 
+# Condition 6 asked for the rule to be quoted from the rule book, not remembered. Read off
+# Chapter 5 of the PSX Regulations print dated 09-Feb-2026. Kept here because the two limits
+# below are what a reader silently loses when this is summarised as "dividends come 7 days early".
+PSX_INTIMATION_CLAUSE = {
+    "ref": "PSX Regulations, Chapter 5, clause 5.9.2, page 10 (print dated 09-Feb-2026)",
+    "text": ("Every Listed Company and issuer of listed security shall notify to the Exchange at "
+             "least one week in advance the date, time and place of its board meeting specially "
+             "called for consideration of its quarterly and annual accounts or for declaration of "
+             "any entitlement for the security holders..."),
+    "limits": (
+        "(i) the wording is 'at least one week', which is a floor on notice, not a forecast "
+        "window - a company may intimate 30 days ahead and it would still comply; "
+        "(ii) it binds only meetings called for accounts or for an entitlement, so a notice "
+        "titled 'Board Meeting Intimation' on some other agenda is outside this clause."),
+    "so_what": ("The meeting DATE is public in advance because this clause forces it. The "
+                "dividend FIGURE is not published by any feed available here, so nothing in this "
+                "module can know the amount before the market does."),
+}
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS announcements(
   doc_id        TEXT PRIMARY KEY,
@@ -80,6 +99,16 @@ CREATE TABLE IF NOT EXISTS news_runs(
   rows_seen      INTEGER NOT NULL DEFAULT 0,
   rows_new       INTEGER NOT NULL DEFAULT 0,
   error          TEXT
+);
+CREATE TABLE IF NOT EXISTS ocr_verification(
+  doc_id        TEXT PRIMARY KEY REFERENCES board_meetings(doc_id),
+  symbol        TEXT,
+  ocr_date      TEXT,
+  flagged_on    TEXT NOT NULL,
+  checked_on    TEXT,
+  checked_value TEXT,
+  agreed        INTEGER,
+  note          TEXT
 );
 """
 
@@ -357,7 +386,66 @@ def update_board_meetings(conn, limit: int = 6) -> list[dict]:
         made.append({"doc_id": doc_id, "symbol": sym, "company": comp, **p})
         conn.commit()
         time.sleep(1.0)
+    sync_ocr_audit(conn)
     return made
+
+
+# ------------------------------------------------- condition 3: OCR manual cross-check log
+OCR_CROSS_CHECK_DAYS = 14   # the review asked for every OCR date to be checked by hand for 2 weeks
+
+
+def sync_ocr_audit(conn) -> int:
+    """Open a cross-check row for every meeting date that only OCR could read.
+
+    Automatic, because an OCR date nobody wrote down is an OCR date nobody will check. The row
+    records the date OCR produced and nothing else - the human answer goes in record_ocr_check.
+    """
+    before = conn.execute("SELECT COUNT(*) FROM ocr_verification").fetchone()[0]
+    for doc_id, sym, mdate in conn.execute(
+            "SELECT doc_id, symbol, meeting_date FROM board_meetings "
+            "WHERE date_source='OCR' AND meeting_date IS NOT NULL AND is_current=1"):
+        conn.execute("INSERT OR IGNORE INTO ocr_verification(doc_id, symbol, ocr_date, flagged_on) "
+                     "VALUES (?,?,?,?)", (doc_id, sym, mdate, _now()))
+    conn.commit()
+    return conn.execute("SELECT COUNT(*) FROM ocr_verification").fetchone()[0] - before
+
+
+def record_ocr_check(conn, doc_id: str, observed_date: str | None, note: str = "") -> dict:
+    """Log one human reading of the PDF. agreed stays NULL until someone actually looks."""
+    cur = conn.execute("SELECT ocr_date FROM ocr_verification WHERE doc_id=?", (doc_id,)).fetchone()
+    if cur is None:
+        return {"doc_id": doc_id, "logged": False, "why": "no OCR-flagged row for this notice"}
+    agreed = 1 if (observed_date and observed_date == cur[0]) else 0
+    conn.execute("UPDATE ocr_verification SET checked_on=?, checked_value=?, agreed=?, note=? "
+                 "WHERE doc_id=?", (_now(), observed_date, agreed, note[:300], doc_id))
+    conn.commit()
+    return {"doc_id": doc_id, "logged": True, "ocr_said": cur[0], "pdf_says": observed_date,
+            "agreed": bool(agreed)}
+
+
+def ocr_audit_message(conn, today: str | None = None) -> str:
+    """The pending list. Empty is a real claim, so the count is always printed."""
+    open_rows = conn.execute(
+        "SELECT doc_id, symbol, ocr_date, flagged_on FROM ocr_verification "
+        "WHERE checked_on IS NULL ORDER BY flagged_on").fetchall()
+    done = conn.execute("SELECT COUNT(*), SUM(agreed) FROM ocr_verification "
+                        "WHERE checked_on IS NOT NULL").fetchone()
+    checked, matched = (done[0] or 0), (done[1] or 0)
+    lines = [f"[OCR CROSS-CHECK LOG] {len(open_rows)} unverified, {checked} checked, "
+             f"{matched} matched the PDF"]
+    if open_rows:
+        rate = f"OCR accuracy so far: {matched}/{checked} = {100*matched/checked:.0f}%" if checked else \
+            "OCR accuracy: not measurable yet, no check recorded"
+        lines.append(f"  Unverified dates are the ones OCR had to read off a scanned image. {rate}.")
+        for doc_id, sym, mdate, flagged in open_rows[:20]:
+            lines.append(f"  OPEN   {mdate}  {sym or '-':10} doc {doc_id}  since {flagged[:10]}")
+        if len(open_rows) > 20:
+            lines.append(f"  ... and {len(open_rows)-20} more")
+        lines.append(f"  Open the notice PDF and confirm the date for each. Until then this is a")
+        lines.append("  calendar of OCR's best guess, not a verified calendar.")
+    else:
+        lines.append("  Nothing pending: every OCR-derived date on the calendar has been read back.")
+    return "\n".join(lines)
 
 
 def price_context(conn, symbol: str | None) -> str:
@@ -536,6 +624,9 @@ def daily_calendar_message(conn, horizon_days: int = 10, today: str | None = Non
     if unparsed:
         lines.append(f"  note: {unparsed} current notice(s) have no usable date "
                      f"(image-only scan, OCR could not read it). Not guessed.")
+    lines.append(f"rule behind this calendar: {PSX_INTIMATION_CLAUSE['ref']} - a company must intimate "
+                 "a accounts/entitlement board meeting 'at least one week' ahead, so the date is public "
+                 "early; the amount never is.")
     lines.append(f"confidence: tested facts from notice PDFs | {CONFIDENCE}")
     return "\n".join(lines)
 
