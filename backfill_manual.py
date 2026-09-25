@@ -228,7 +228,10 @@ def derive_columns(out: pd.DataFrame, conn) -> pd.DataFrame:
     return out
 
 
-def sanity(out: pd.DataFrame) -> list[str]:
+def sanity(out: pd.DataFrame) -> tuple[list[str], str]:
+    """(printed notes, verdict). The verdict is written into quality_flags so the band check is
+    auditable from the database alone - the clean-session rule drafted in
+    amendments/apply_amendment_20.py depends on that, not on someone remembering."""
     notes = []
     if "ldcp" in out and out["ldcp"].notna().any():
         ratio = (out["close"] / out["ldcp"]).dropna()
@@ -240,18 +243,23 @@ def sanity(out: pd.DataFrame) -> list[str]:
                      f"beyond +-15%: {wide} ({wide/len(ratio):.1%})")
         if odd > len(out) * 0.05:
             notes.append("WARNING: >5% of rows have an implausible close/ldcp - check the mapping")
+            verdict = "LDCP_SUSPECT"
         else:
             notes.append("close-vs-ldcp band check PASSED (a +-15% tail is normal: PSX price "
                          "bands are wider than 15% for some categories)")
+            verdict = "LDCP_OK"
     else:
         notes.append("ldcp not mapped: the close-vs-ldcp check is UNAVAILABLE for this backfill")
+        verdict = "LDCP_UNAVAILABLE"
     notes.append(f"rows {len(out)}, volume zero/NA {int((out['volume'].fillna(0) <= 0).sum())}")
-    return notes
+    return notes, verdict
 
 
-def write(out: pd.DataFrame, conn, sha: str, live: bool) -> int:
+def write(out: pd.DataFrame, conn, sha: str, live: bool, verdict: str = "LDCP_UNAVAILABLE") -> int:
     ts = datetime.now(PKT).isoformat(timespec="seconds")
-    flag = f"MANUAL_DOWNLOAD:sha256=" + (sha[:12] if live else sha[:12] + ":SCRATCH")
+    flag = f"MANUAL_DOWNLOAD:sha256={sha[:12]}:{verdict}"
+    if not live:
+        flag += ":SCRATCH"
     rows = [(r.trade_date, r.symbol, r.sector, r.ldcp, r.open, r.high, r.low, r.close,
              r.volume, ts, r.base_symbol, r.market, 1, flag) for r in out.itertuples()]
     conn.executemany("INSERT OR REPLACE INTO daily_quotes(trade_date, symbol, sector, ldcp, open, "
@@ -283,6 +291,8 @@ def main():
     ap.add_argument("--map", default="")
     ap.add_argument("--overwrite", action="store_true",
                     help="allow replacing rows on a date the pipeline already captured")
+    ap.add_argument("--force", action="store_true",
+                    help="allow --live even if the close-vs-ldcp band check fails")
     a = ap.parse_args()
 
     path = Path(a.file)
@@ -315,8 +325,10 @@ def main():
                              f"clobber a captured day - re-run with --overwrite if intended.")
         out = derive_columns(build(path, a.date, mapping), conn)
         print("=== SANITY ===")
-        for n in sanity(out):
+        notes, verdict = sanity(out)
+        for n in notes:
             print("  ", n)
+        print(f"   verdict recorded on every inserted row: {verdict}")
 
         if not a.live:
             scratch = Path("scratch") / f"backfill_{a.date}_test.db"
@@ -327,7 +339,7 @@ def main():
             src.backup(dst)
             src.close()
             try:
-                n = write(out, dst, sha, False)
+                n = write(out, dst, sha, False, verdict)
                 check_on(dst, a.date, f"scratch ({scratch})")
                 print(f"[+] {n} rows written to the scratch copy only - psx.db untouched")
                 print("    re-run with --live once you have read the sanity lines above")
@@ -338,11 +350,15 @@ def main():
                 dst.close()
             return
 
+        if verdict == "LDCP_SUSPECT" and not a.force:
+            raise SystemExit("close-vs-ldcp band check FAILED, so this day cannot be a clean "
+                             "session. Fix the mapping and re-run, or use --force if the wide "
+                             "moves are real (the row flag will say LDCP_SUSPECT either way).")
         P.archive_raw(f"manual_backfill_{a.date}", path.read_bytes())
-        n = write(out, conn, sha, True)
+        n = write(out, conn, sha, True, verdict)
         check_on(conn, a.date, "psx.db")
         print(f"[+] wrote {n} rows into psx.db for {a.date} with "
-              f"quality_flags='MANUAL_DOWNLOAD:sha256={sha[:12]}'")
+              f"quality_flags='MANUAL_DOWNLOAD:sha256={sha[:12]}:{verdict}'")
         dates = [r[0] for r in conn.execute(
             "SELECT DISTINCT trade_date FROM daily_quotes WHERE is_final=1 "
             "AND trade_date>='2026-09-01' ORDER BY trade_date")]

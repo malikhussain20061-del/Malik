@@ -327,6 +327,52 @@ def test_telegram_diagnosis_names_the_real_reason():
     print("  [PASS] 4 failure modes each named specifically; token never echoed")
 
 
+def _counter_db(rows_quotes, rows_mts):
+    """Minimal in-memory DB carrying only what clean_session_count reads."""
+    import sqlite3
+    c = sqlite3.connect(":memory:")
+    c.execute("CREATE TABLE daily_quotes(trade_date TEXT, symbol TEXT, is_final INT, quality_flags TEXT)")
+    c.execute("CREATE TABLE mts_snapshots(report_date TEXT, symbol TEXT, data_as_of TEXT)")
+    c.executemany("INSERT INTO daily_quotes VALUES (?,?,?,?)", rows_quotes)
+    c.executemany("INSERT INTO mts_snapshots VALUES (?,?,?)", rows_mts)
+    return c
+
+
+def test_stale_mts_report_is_not_clean():
+    print("\n[TEST 16] A 14-Sep MTS file fetched on 23-Sep does NOT make 23-Sep clean...")
+    import news_job as J
+    # quotes exist for 23-Sep, and a report was CAPTURED on 23-Sep - but the positions are 14-Sep.
+    c = _counter_db([("2026-09-23", "LUCK", 1, "")], [("2026-09-14", "LUCK", "2026-09-11")])
+    n, why = J.clean_session_count(c)
+    assert n == 0, f"stale report counted as clean: n={n}"
+    assert "no MTS positions dated this session" in why[0], why
+    print(f"  [PASS] rejected with: {why[0]}")
+    # and the same session IS clean when the positions really are for that date
+    c2 = _counter_db([("2026-09-23", "LUCK", 1, "")], [("2026-09-24", "LUCK", "2026-09-23")])
+    n2, _ = J.clean_session_count(c2)
+    assert n2 == 1, f"fresh positions not counted: {n2}"
+    print("  [PASS] same session counts once when data_as_of matches the session")
+
+
+def test_manual_rows_must_prove_themselves():
+    print("\n[TEST 17] Hand-downloaded rows only count with sha + passed band check, never SCRATCH...")
+    import news_job as J
+    mts = [("2026-09-24", "LUCK", "2026-09-23")]
+    good = [("2026-09-23", "LUCK", 1, "MANUAL_DOWNLOAD:sha256=abc123:LDCP_OK")]
+    scratch = [("2026-09-23", "LUCK", 1, "MANUAL_DOWNLOAD:sha256=abc123:LDCP_OK:SCRATCH")]
+    noband = [("2026-09-23", "LUCK", 1, "MANUAL_DOWNLOAD:sha256=abc123:LDCP_SUSPECT")]
+    nosha = [("2026-09-23", "LUCK", 1, "")]
+    for label, rows, want in (("sha + LDCP_OK", good, 1), ("test-written", scratch, 0),
+                              ("band check failed", noband, 0)):
+        n, why = J.clean_session_count(_counter_db(rows, mts))
+        assert n == want, f"{label}: got n={n}, want {want} ({why})"
+        print(f"  [PASS] {label:20s} -> {n}/5")
+    # a session with no manual marker at all is judged on the MTS leg only (captured path)
+    n, _ = J.clean_session_count(_counter_db(nosha, mts))
+    assert n == 1, n
+    print("  [PASS] pipeline-captured rows are not failed for lacking a download sha")
+
+
 def test_suite():
     print("=" * 72)
     print("  PSX NEWS MODULE REGRESSION SUITE")
@@ -340,9 +386,11 @@ def test_suite():
                test_missing_feed_and_stall_are_outages, test_clause_5_9_2_scope_split,
                test_manual_ocr_check_is_recorded, test_intraday_archive_refuses_without_permission,
                test_cadence_slows_after_the_close,
-               test_telegram_diagnosis_names_the_real_reason):
+               test_telegram_diagnosis_names_the_real_reason,
+               test_stale_mts_report_is_not_clean,
+               test_manual_rows_must_prove_themselves):
         fn()
-    print("\n[ALL TESTS PASSED] 15/15 news-monitor regressions pinned.")
+    print("\n[ALL TESTS PASSED] 17/17 news-monitor regressions pinned.")
 
 
 if __name__ == "__main__":

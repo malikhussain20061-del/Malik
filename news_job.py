@@ -228,8 +228,55 @@ def loop(active: int = 300, late: int = 1800) -> None:
         time.sleep(wait)
 
 
+CLEAN_RULE_STATUS = "DRAFT - amendments/apply_amendment_20.py, not yet registered in the ledger"
+
+
+def clean_session_count(conn, need: int = 5) -> tuple[int, list[str]]:
+    """x/5 for evaluation_start_condition, computed from the database alone.
+
+    The rule is DRAFT until Amendment #20 is registered, so this number is shown during the
+    shadow run to make the gate visible - it decides nothing yet. Every session that fails is
+    reported with the condition it failed, because a bare fraction would hide which half of the
+    pipeline is missing.
+    """
+    dates = [r[0] for r in conn.execute(
+        "SELECT DISTINCT trade_date FROM daily_quotes WHERE is_final=1 ORDER BY trade_date")]
+    # The MTS leg is keyed on the date the positions describe, NOT the date the file happened to
+    # be fetched. Keying on capture date would call a stale report "fresh" the first time it is
+    # registered, which is exactly how a 14-Sep file would have passed for a 23-Sep session here.
+    mts_dates = {r[0] for r in conn.execute(
+        "SELECT COALESCE(data_as_of, report_date) FROM mts_snapshots")}
+
+    def verdict(d: str) -> tuple[bool, str]:
+        if not dates:
+            return False, "no quotes at all"
+        flags = {r[0] for r in conn.execute(
+            "SELECT DISTINCT quality_flags FROM daily_quotes WHERE trade_date=?", (d,)) if r[0]}
+        manual = any(f.startswith("MANUAL_DOWNLOAD:") for f in flags)
+        if manual:
+            if any(":SCRATCH" in f for f in flags):
+                return False, "test-written rows present"
+            if not any(":LDCP_OK" in f for f in flags):
+                return False, "manual rows without a passed close-vs-ldcp check"
+        if d not in mts_dates:
+            return False, "no MTS positions dated this session"
+        return True, ""
+
+    run, why = 0, []
+    for d in reversed(dates):
+        ok, reason = verdict(d)
+        if ok:
+            run += 1
+        else:
+            why.append(f"{d}: {reason}")
+            break
+        if run >= need:
+            break
+    return run, why
+
+
 def digest() -> str:
-    """The three lines that answer 'is anything broken today', in one screen.
+    """The four lines that answer 'is anything broken today', in one screen.
 
     Order is deliberate: the MTS feed date is the one that gates the real experiment, the
     tamper drill is the only thing that checks the locked code hash during shadow mode, and
@@ -254,9 +301,15 @@ def digest() -> str:
     except Exception as e:
         drill = f"DRILL DID NOT RUN: {type(e).__name__}"
     ok, health = N.check_health(conn)
+    try:
+        n_clean, why = clean_session_count(conn)
+        clean = f"{n_clean}/5" + (f"   newest blocked by: {why[0]}" if why else "")
+    except Exception as e:
+        clean = f"NOT COMPUTABLE: {type(e).__name__}: {str(e)[:80]}"
     conn.close()
     return (f"{datetime.now(PKT).strftime('%Y-%m-%d %H:%M PKT')}\n"
             f"  MTS feed      : {mts}\n"
+            f"  clean sessions: {clean}  [{CLEAN_RULE_STATUS}]\n"
             f"  guard_drill   : {drill}\n"
             f"  news monitor  : {health}")
 
